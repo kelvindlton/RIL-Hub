@@ -1,0 +1,10 @@
+{
+  "name": "ril-platform-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix ril-app",
+    "build": "npm run build --prefix ril-app",
+    "start": "npm run start --prefix ril-app",
+    "lint": "npm run lint --prefix ril-app"
+  }
+}

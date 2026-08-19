@@ -1,0 +1,21 @@
+{
+  "name": "ril-hub",
+  "version": "1.0.0",
+  "description": "RIL Hub - Technical Community Portal",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vite --port 3000 --open",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "ril-hub",
+    "glassmorphism",
+    "community"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "vite": "^5.2.0"
+  }
+}
