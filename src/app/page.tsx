@@ -46,7 +46,8 @@ function DashboardContent() {
     bookmarkPost,
     addComment,
     addSpotlight,
-    rewardUser
+    rewardUser,
+    hubEngagement,
   } = useApp();
 
   // Role authorization: only Admin and Staff can create and manage spotlight honors
@@ -98,6 +99,33 @@ function DashboardContent() {
   const [expandedPosts, setExpandedPosts] = useState<{ [postId: string]: boolean }>({});
   const [composerError, setComposerError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ─── Hub Engagement (trailing 7 days, bucketed by real weekday) ─────────────
+  // hubEngagement is provided by AppContext (SECURITY DEFINER RPC, aggregate
+  // counts only). null = still loading; [] = loaded but no activity yet.
+  // Bars are keyed on UTC dates to match the check-in system, and "Today" is the
+  // last bar in its true weekday position (not a fixed slot).
+  const engagementBars = React.useMemo(() => {
+    if (hubEngagement === null) return null;
+    const counts = new Map(hubEngagement.map(d => [d.date, d.count]));
+    const todayKey = new Date().toISOString().split('T')[0];
+    const bars: { key: string; label: string; count: number; isToday: boolean }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(`${todayKey}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().split('T')[0];
+      bars.push({
+        key,
+        label: i === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+        count: counts.get(key) ?? 0,
+        isToday: i === 0,
+      });
+    }
+    return bars;
+  }, [hubEngagement]);
+
+  const engagementMax = engagementBars ? Math.max(0, ...engagementBars.map(b => b.count)) : 0;
+  const engagementEmpty = engagementBars !== null && engagementMax === 0;
 
   const filteredPosts = activeHashtag
     ? posts.filter(p => p.tags.some(t => t.toLowerCase() === activeHashtag.toLowerCase()))
@@ -801,7 +829,7 @@ function DashboardContent() {
           )}
 
           {/* Hub Engagement CSS Bar Chart */}
-          {isLoading && posts.length === 0 ? (
+          {engagementBars === null ? (
             <HubEngagementSkeleton />
           ) : (
           <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-4">
@@ -809,33 +837,42 @@ function DashboardContent() {
               Hub Engagement
             </h4>
 
+            {engagementEmpty ? (
+              <div className="h-28 flex flex-col items-center justify-center text-center gap-2">
+                <TrendingUp className="w-6 h-6 text-gray-300" />
+                <p className="text-[11px] font-semibold text-gray-400 max-w-[180px]">
+                  Engagement data will appear as members check in.
+                </p>
+              </div>
+            ) : (
             <div className="h-28 flex items-end justify-around gap-2.5 pt-4">
-              {[
-                { day: 'Mon', height: '30%', active: false },
-                { day: 'Tue', height: '50%', active: false },
-                { day: 'Wed', height: '40%', active: false },
-                { day: 'Today', height: '80%', active: true },
-                { day: 'Fri', height: '70%', active: false },
-                { day: 'Sat', height: '20%', active: false },
-                { day: 'Sun', height: '10%', active: false }
-              ].map((item) => (
-                <div key={item.day} className="flex flex-col items-center flex-1 h-full">
+              {engagementBars.map((item) => {
+                // Scale relative to the busiest day in the window; floor any
+                // nonzero day at 8% so it stays visibly distinct from a zero day.
+                const heightPct = item.count > 0
+                  ? Math.max(8, Math.round((item.count / engagementMax) * 100))
+                  : 0;
+                return (
+                <div key={item.key} className="flex flex-col items-center flex-1 h-full">
                   <div className="flex-1 w-full flex items-end min-h-0">
                     <div
                       className={`w-full rounded-t-sm transition-all duration-300 ${
-                        item.active
+                        item.isToday
                           ? 'bg-brand-blue shadow-sm shadow-brand-blue/20'
                           : 'bg-[#DCE6F1] hover:bg-[#C2D3E7]'
                       }`}
-                      style={{ height: item.height }}
+                      style={{ height: `${heightPct}%` }}
+                      title={`${item.count} check-in${item.count === 1 ? '' : 's'}`}
                     ></div>
                   </div>
-                  <span className={`text-[8.5px] font-bold mt-1.5 shrink-0 ${item.active ? 'text-brand-blue font-extrabold' : 'text-gray-400'}`}>
-                    {item.day}
+                  <span className={`text-[8.5px] font-bold mt-1.5 shrink-0 ${item.isToday ? 'text-brand-blue font-extrabold' : 'text-gray-400'}`}>
+                    {item.label}
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
+            )}
           </div>
           )}
 

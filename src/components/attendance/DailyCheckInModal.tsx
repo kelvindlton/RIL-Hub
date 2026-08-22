@@ -13,7 +13,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   currentUser: { id: string; name: string; avatar: string };
-  onCheckInSuccess: (userId: string) => void;
+  onCheckInSuccess: (userId: string) => Promise<{ success: boolean; message?: string }>;
   getDailyCheckInStatus: (userId: string) => DailyCheckInStatus;
   /** Dev-mode: simulate being at the hub without real GPS match */
   devSimulate?: boolean;
@@ -151,26 +151,45 @@ export default function DailyCheckInModal({
   const [hubName, setHubName] = useState('Renaissance Innovation Labs');
   const [countdown, setCountdown] = useState(4);
   const [devMode, setDevMode] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const status = getDailyCheckInStatus(currentUser.id);
   const confettiActive = state === 'success';
   const confettiCanvasRef = useConfetti(confettiActive);
 
+  // ── Check-in submission ────────────────────────────────────────────────────
+
+  // Await the authoritative write, then show success or a real error.
+  const submitCheckIn = useCallback(async () => {
+    setState('verifying');
+    setErrorMsg(null);
+    try {
+      const res = await onCheckInSuccess(currentUser.id);
+      if (res.success) {
+        setState('success');
+        setCountdown(4);
+      } else {
+        setErrorMsg(res.message ?? 'Check-in could not be saved.');
+        setState('error');
+      }
+    } catch {
+      setErrorMsg('Network error — your check-in was not saved. Please try again.');
+      setState('error');
+    }
+  }, [currentUser.id, onCheckInSuccess]);
+
   // ── Geolocation flow ─────────────────────────────────────────────────────
 
   const runGeolocation = useCallback((simulate = false) => {
     setState('requesting');
     setDistanceM(null);
+    setErrorMsg(null);
 
     if (simulate) {
       // Dev simulation — skip real GPS
       setState('verifying');
-      setTimeout(() => {
-        onCheckInSuccess(currentUser.id);
-        setState('success');
-        setCountdown(4);
-      }, 1400);
+      setTimeout(() => { void submitCheckIn(); }, 1400);
       return;
     }
 
@@ -188,9 +207,7 @@ export default function DailyCheckInModal({
           setDistanceM(result.distanceM);
           setHubName(result.hub.name);
           if (result.within) {
-            onCheckInSuccess(currentUser.id);
-            setState('success');
-            setCountdown(4);
+            void submitCheckIn();
           } else {
             setState('outside');
           }
@@ -205,7 +222,7 @@ export default function DailyCheckInModal({
       },
       { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 }
     );
-  }, [currentUser.id, onCheckInSuccess]);
+  }, [currentUser.id, onCheckInSuccess, submitCheckIn]);
 
   // Start flow when modal opens
   useEffect(() => {
@@ -356,7 +373,7 @@ export default function DailyCheckInModal({
         </div>
         <div className="space-y-2">
           <h3 className="text-lg font-extrabold text-gray-900">Something went wrong</h3>
-          <p className="text-xs text-gray-500 font-medium">We couldn't retrieve your location. Check your connection and try again.</p>
+          <p className="text-xs text-gray-500 font-medium">{errorMsg ?? "We couldn't retrieve your location. Check your connection and try again."}</p>
         </div>
         <button
           onClick={() => runGeolocation(devMode)}

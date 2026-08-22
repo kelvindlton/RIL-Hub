@@ -19,6 +19,16 @@ import * as attendanceData from '@/data/attendance';
 import * as spotlightsData from '@/data/spotlights';
 import type { Spotlight } from '@/data/spotlights';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠  Do NOT reintroduce localStorage (or any client-side) caching for
+//    server-authoritative state — check-ins, points, streaks.
+//    2026-08-20 incident: a leftover `ril_daily_checkins` localStorage cache
+//    masked real DB state for hours after check-ins were made server-authoritative
+//    — users saw a false "already checked in today" until they cleared storage.
+//    All such state must be sourced live from Supabase / RPCs only
+//    (record_daily_checkin, fetchDailyCheckInStatus, hub_engagement_last_7_days).
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface DailyCheckInRecord {
   date: string;      // YYYY-MM-DD
   time: string;      // HH:MM
@@ -56,8 +66,10 @@ interface AppContextType {
   addComment: (postId: string, content: string) => Promise<void>;
   toggleRsvp: (eventId: string) => Promise<void>;
   checkInUser: (eventId: string, userId: string, method: 'qr' | 'manual') => Promise<{ success: boolean; message: string }>;
-  recordDailyCheckIn: (userId: string, lat?: number, lon?: number) => Promise<void>;
+  recordDailyCheckIn: (userId: string, lat?: number, lon?: number) => Promise<{ success: boolean; message?: string }>;
   getDailyCheckInStatus: (userId: string) => DailyCheckInStatus;
+  hubEngagement: attendanceData.HubEngagementDay[] | null;
+  refetchHubEngagement: () => Promise<void>;
   addEvent: (eventData: Omit<Event, 'id' | 'rsvpCount' | 'isRsvped' | 'checkedInUsers'>) => Promise<void>;
   addSpotlight: (params: { userId: string; category: string; badgeLabel: string; quote: string; tags: string[]; theme: 'blue' | 'white' }) => Promise<void>;
   addWelfareRequest: (type: 'welfare' | 'suggestion', title: string, content: string, priority: 'low' | 'medium' | 'high' | 'critical') => Promise<void>;
@@ -118,6 +130,12 @@ export { simulatedReplies };
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUserState] = useState<UserProfile>(initialProfiles[0]);
+  // The resolved *authenticated* user id — a real Supabase UUID once auth resolves,
+  // null when resolved-but-signed-out (or an auth/env failure), and undefined while
+  // still resolving. Per-user DB queries MUST key off this, never currentUser.id:
+  // currentUser is seeded with a mock profile (initialProfiles[0], id 'user-sarah')
+  // for first paint, and querying uuid columns with that non-UUID id returns 400.
+  const [authUserId, setAuthUserId] = useState<string | null | undefined>(undefined);
   // Start data collections EMPTY so skeleton loaders show during the initial Supabase fetch.
   // Initialising with mock data caused a flash-of-placeholder-content before real data arrived.
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
@@ -127,26 +145,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [spotlights, setSpotlights] = useState<Spotlight[]>([]);
   const [isCheckInLoading, setIsCheckInLoading] = useState<boolean>(true);
-  const [dailyCheckIns, setDailyCheckIns] = useState<Record<string, DailyCheckInRecord>>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem('ril_daily_checkins');
-        if (cached) {
-          const parsed = JSON.parse(cached) as Record<string, DailyCheckInRecord>;
-          const today = new Date().toISOString().split('T')[0];
-          // STRICT DATE CHECK: Only accept cached records matching today's date
-          const validTodayEntries: Record<string, DailyCheckInRecord> = {};
-          for (const [uid, rec] of Object.entries(parsed)) {
-            if (rec && rec.date === today) {
-              validTodayEntries[uid] = rec;
-            }
-          }
-          return validTodayEntries;
-        }
-      } catch {}
-    }
-    return {};
-  });
+  const [hubEngagement, setHubEngagement] = useState<attendanceData.HubEngagementDay[] | null>(null);
+  // Check-in status is sourced ONLY from the DB (fetchDailyCheckInStatus) and the
+  // record_daily_checkin RPC — never localStorage. Starting empty prevents a stale
+  // optimistic cache from masquerading as truth; the 1b effect below hydrates it.
+  const [dailyCheckIns, setDailyCheckIns] = useState<Record<string, DailyCheckInRecord>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isError, setIsError] = useState<boolean>(false);
@@ -196,38 +199,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Hub Engagement — aggregate check-in counts for the trailing 7 days.
+  // Lifted into context so a successful check-in can refresh the chart
+  // immediately (see recordDailyCheckIn) with no manual page refresh.
+  const refetchHubEngagement = useCallback(async () => {
+    const rows = await attendanceData.fetchHubEngagementLast7Days();
+    setHubEngagement(rows);
+  }, []);
+
   // 1. Fetch initial live data on mount
   useEffect(() => {
     loadLiveData();
   }, [loadLiveData]);
 
-  // 1b. Hydrate daily check-in status from Supabase whenever the current user resolves.
-  //     Validates against live DB and synchronizes the local date-verified cache.
+  // 1a. Load the hub engagement chart on mount (aggregate, RPC-backed).
   useEffect(() => {
-    if (!currentUser?.id) return;
+    refetchHubEngagement();
+  }, [refetchHubEngagement]);
+
+  // 1a-cleanup. One-time migration: drop the legacy localStorage check-in cache.
+  // Older builds persisted optimistic state here and read it back as truth, which
+  // could show a false "already checked in" after the RPC rewrite. The DB is
+  // authoritative now, so delete the key outright (no-op once it's gone).
+  useEffect(() => {
+    try { localStorage.removeItem('ril_daily_checkins'); } catch {}
+  }, []);
+
+  // 1b. Hydrate daily check-in status from Supabase once the AUTHENTICATED user
+  //     resolves. Keyed on authUserId (a real UUID), never currentUser.id — firing
+  //     this with the mock seed 'user-sarah' 400s on Postgres uuid columns.
+  useEffect(() => {
+    // Auth not resolved yet: leave isCheckInLoading in its initial `true` state so
+    // the UI shows a skeleton rather than a premature "not checked in".
+    if (authUserId === undefined) return;
+
+    // Resolved but signed out (or auth/env failure). AppProvider lives in the root
+    // layout, so this effect also runs on /login, /signup, /auth/* (middleware
+    // exempts those) and when Supabase env is unset (middleware skips guarding and
+    // createClient falls back to placeholder creds). Settle to a definite
+    // not-loading state instead of spinning — do NOT rely on the route guard to
+    // keep logged-out users away from this component.
+    if (authUserId === null) {
+      setIsCheckInLoading(false);
+      return;
+    }
+
     const today = new Date().toISOString().split('T')[0];
-    const cachedRecord = dailyCheckIns[currentUser.id];
+    const cachedRecord = dailyCheckIns[authUserId];
     if (!cachedRecord || cachedRecord.date !== today) {
       setIsCheckInLoading(true);
     }
 
-    attendanceData.fetchDailyCheckInStatus(currentUser.id)
+    attendanceData.fetchDailyCheckInStatus(authUserId)
       .then((status) => {
-        if (status.checkedInToday) {
-          setDailyCheckIns(prev => {
-            const next = {
+        // The DB is authoritative in BOTH directions: set the entry when it
+        // confirms a check-in, and clear any entry when it reports none — so a
+        // stale "checked in" state can never survive a hydration.
+        setDailyCheckIns(prev => {
+          if (status.checkedInToday) {
+            return {
               ...prev,
-              [currentUser.id]: {
+              [authUserId]: {
                 date: today,
                 time: status.checkInTime || '',
                 streak: status.streak,
                 totalDays: status.totalDays,
-              }
+              },
             };
-            try { localStorage.setItem('ril_daily_checkins', JSON.stringify(next)); } catch {}
-            return next;
-          });
-        }
+          }
+          if (!(authUserId in prev)) return prev;
+          const next = { ...prev };
+          delete next[authUserId];
+          return next;
+        });
       })
       .catch(() => {
         // Supabase unavailable — local optimistic state will be used
@@ -235,30 +279,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .finally(() => {
         setIsCheckInLoading(false);
       });
-  }, [currentUser?.id]);
+  }, [authUserId]);
 
-  // 2. Listen to active auth user & session changes
+  // 2. Listen to active auth user & session changes. This is the ONLY writer of
+  //    authUserId — every path below moves it out of `undefined` (to a UUID or
+  //    null), including failures, so effect 1b's loader can never hang.
   useEffect(() => {
     try {
       const supabase = createClient();
-      supabase.auth.getUser().then(({ data: { user } }) => {
-        if (user) {
-          profilesData.fetchProfileById(user.id).then((profile) => {
-            if (profile) {
-              setCurrentUserState(profile);
-            } else {
-              setCurrentUserState((prev) => ({
-                ...prev,
-                id: user.id,
-                email: user.email || prev.email,
-                name: user.user_metadata?.name || prev.name,
-              }));
-            }
-          });
-        }
-      });
+      supabase.auth.getUser()
+        .then(({ data: { user } }) => {
+          setAuthUserId(user?.id ?? null);
+          if (user) {
+            profilesData.fetchProfileById(user.id).then((profile) => {
+              if (profile) {
+                setCurrentUserState(profile);
+              } else {
+                setCurrentUserState((prev) => ({
+                  ...prev,
+                  id: user.id,
+                  email: user.email || prev.email,
+                  name: user.user_metadata?.name || prev.name,
+                }));
+              }
+            });
+          }
+        })
+        .catch(() => {
+          // getUser failed (network / bad creds) — treat as signed out so the
+          // check-in loader settles instead of spinning.
+          setAuthUserId(null);
+        });
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        setAuthUserId(session?.user?.id ?? null);
         if (session?.user) {
           const profile = await profilesData.fetchProfileById(session.user.id);
           if (profile) {
@@ -271,7 +325,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         subscription.unsubscribe();
       };
     } catch {
-      // Ignored if env variables are pending setup
+      // createClient threw (shouldn't, given placeholder fallback — but be safe):
+      // resolve auth to signed-out so effect 1b doesn't hang on `undefined`.
+      setAuthUserId(null);
     }
   }, []);
 
@@ -510,51 +566,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const recordDailyCheckIn = async (userId: string, lat?: number, lon?: number) => {
+  const recordDailyCheckIn = async (
+    userId: string,
+    lat?: number,
+    lon?: number,
+  ): Promise<{ success: boolean; message?: string }> => {
     const today = new Date().toISOString().split('T')[0];
-    const now = new Date();
-    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-    // Optimistically update local state immediately for snappy UI
-    const prevRecord = dailyCheckIns[userId];
-    const baseStreak = prevRecord?.streak ?? currentUser.streak ?? 0;
-    const baseTotal = prevRecord?.totalDays ?? 0;
+    // Server-authoritative write. No optimistic guessing: we apply exactly what
+    // the RPC reports, and on failure we change nothing and surface the message.
+    const result = await attendanceData.recordDailyCheckIn(userId, lat, lon);
 
-    const optimisticRecord: DailyCheckInRecord = {
-      date: today,
-      time,
-      streak: baseStreak + 1,
-      totalDays: baseTotal + 1,
-    };
-
-    setDailyCheckIns(prev => {
-      const next = { ...prev, [userId]: optimisticRecord };
-      try { localStorage.setItem('ril_daily_checkins', JSON.stringify(next)); } catch {}
-      return next;
-    });
-
-    rewardUser(userId, 50);
-
-    try {
-      // Write to Supabase; on success re-hydrate from DB to get the authoritative streak
-      await attendanceData.recordDailyCheckIn(userId, lat, lon);
-      const status = await attendanceData.fetchDailyCheckInStatus(userId);
-      setDailyCheckIns(prev => {
-        const next = {
-          ...prev,
-          [userId]: {
-            date: today,
-            time: status.checkInTime || time,
-            streak: status.streak,
-            totalDays: status.totalDays,
-          }
-        };
-        try { localStorage.setItem('ril_daily_checkins', JSON.stringify(next)); } catch {}
-        return next;
-      });
-    } catch {
-      // Retained optimistic state — DB write failed silently
+    if (!result.success) {
+      return { success: false, message: result.message ?? 'Check-in failed. Please try again.' };
     }
+
+    const record: DailyCheckInRecord = {
+      date: today,
+      time: result.checkInTime ?? '',
+      streak: result.streak ?? 0,
+      totalDays: result.totalDays ?? 0,
+    };
+    setDailyCheckIns(prev => ({ ...prev, [userId]: record }));
+
+    // Sync the profile balance/streak to the server truth returned by the RPC.
+    setProfiles(prev => prev.map(p =>
+      p.id === userId
+        ? { ...p, points: result.points ?? p.points, streak: result.streak ?? p.streak }
+        : p,
+    ));
+    if (currentUser.id === userId) {
+      setCurrentUserState(prev => ({
+        ...prev,
+        points: result.points ?? prev.points,
+        streak: result.streak ?? prev.streak,
+      }));
+    }
+
+    // The check-in changed today's aggregate — refresh the engagement chart so
+    // it updates alongside the check-in card without a manual page refresh.
+    void refetchHubEngagement();
+
+    return { success: true };
   };
 
   const getDailyCheckInStatus = (userId: string): DailyCheckInStatus => {
@@ -725,6 +778,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         checkInUser,
         recordDailyCheckIn,
         getDailyCheckInStatus,
+        hubEngagement,
+        refetchHubEngagement,
         addEvent,
         addSpotlight,
         addWelfareRequest,
