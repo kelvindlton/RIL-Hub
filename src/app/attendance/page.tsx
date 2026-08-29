@@ -35,7 +35,7 @@ const MOCK_HISTORICAL_EVENTS = [
 ];
 
 function AttendanceContent() {
-  const { events, profiles, currentUser, isLoading, isError, errorMessage, refetchData, checkInUser } = useApp();
+  const { events, profiles, currentUser, isUserLoading, isLoading, isError, errorMessage, refetchData, checkInUser } = useApp();
   const searchParams = useSearchParams();
   const tab = searchParams.get('tab') || 'tracker';
 
@@ -264,14 +264,17 @@ function AttendanceContent() {
                         name={currentUser.name}
                         size="xl"
                         className="border-2 border-brand-blue shrink-0"
+                        loading={isUserLoading}
                       />
                       <div>
-                        <h3 className="font-extrabold text-base leading-snug">{currentUser.name}</h3>
+                        <h3 className="font-extrabold text-base leading-snug">
+                          {isUserLoading ? <span className="inline-block w-32 h-4 bg-white/20 animate-pulse rounded" aria-hidden="true" /> : currentUser.name}
+                        </h3>
                         <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wider block mt-0.5">
-                          {currentUser.programCohort}
+                          {isUserLoading ? <span className="inline-block w-24 h-2.5 bg-white/15 animate-pulse rounded" aria-hidden="true" /> : currentUser.programCohort}
                         </span>
                         <div className="flex flex-wrap gap-1.5 mt-2">
-                          {currentUser.badges.slice(0, 2).map((badge) => (
+                          {!isUserLoading && currentUser.badges.slice(0, 2).map((badge) => (
                             <span
                               key={badge}
                               className="bg-brand-blue/20 text-sky-blue border border-brand-blue/30 rounded-full px-2 py-0.5 text-[8.5px] font-bold"
@@ -288,7 +291,9 @@ function AttendanceContent() {
                       <Flame className="w-5 h-5 text-orange-500 fill-orange-500 animate-pulse" />
                       <div>
                         <span className="text-[9px] uppercase font-bold text-gray-300 block leading-none">Active Streak</span>
-                        <span className="text-xs font-black text-white block mt-0.5">{currentUser.streak} Sessions</span>
+                        <span className="text-xs font-black text-white block mt-0.5">
+                          {isUserLoading ? <span className="inline-block w-8 h-3 bg-white/20 animate-pulse rounded align-middle" aria-hidden="true" /> : `${currentUser.streak} Sessions`}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -316,7 +321,9 @@ function AttendanceContent() {
                   <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm flex flex-col justify-between">
                     <span className="text-[9.5px] uppercase font-bold text-gray-400 block tracking-wider">Active Streak</span>
                     <div className="mt-3 flex items-baseline gap-1">
-                      <span className="text-xl font-black text-orange-500">{currentUser.streak}</span>
+                      <span className="text-xl font-black text-orange-500">
+                        {isUserLoading ? <span className="inline-block w-8 h-5 bg-gray-200 animate-pulse rounded align-middle" aria-hidden="true" /> : currentUser.streak}
+                      </span>
                       <span className="text-xs text-gray-400 font-bold">Days</span>
                     </div>
                     <span className="text-[9px] text-gray-400 block mt-1">Loyalty check-in streak</span>

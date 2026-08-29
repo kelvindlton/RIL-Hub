@@ -27,12 +27,14 @@ import {
   Award,
   Zap,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 
 function DashboardContent() {
   const {
     currentUser,
+    isUserLoading,
     profiles,
     posts,
     events,
@@ -45,6 +47,7 @@ function DashboardContent() {
     likePost,
     bookmarkPost,
     addComment,
+    deletePost,
     addSpotlight,
     rewardUser,
     hubEngagement,
@@ -93,12 +96,14 @@ function DashboardContent() {
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<string | null>(null);
   const [commentInputs, setCommentInputs] = useState<{ [postId: string]: string }>({});
   const [openMenuPostId, setOpenMenuPostId] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null);
   const [activeHashtag, setActiveHashtag] = useState<string | null>(null);
   const [showTrendsModal, setShowTrendsModal] = useState(false);
   const [expandedPosts, setExpandedPosts] = useState<{ [postId: string]: boolean }>({});
   const [composerError, setComposerError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmDeletePostId, setConfirmDeletePostId] = useState<string | null>(null);
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
 
   // ─── Hub Engagement (trailing 7 days, bucketed by real weekday) ─────────────
   // hubEngagement is provided by AppContext (SECURITY DEFINER RPC, aggregate
@@ -199,8 +204,8 @@ function DashboardContent() {
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
+  const showToast = (msg: string, kind: 'success' | 'error' = 'success') => {
+    setToast({ message: msg, kind });
     window.setTimeout(() => setToast(null), 2200);
   };
 
@@ -270,6 +275,7 @@ function DashboardContent() {
                     name={currentUser.name}
                     size="md"
                     className="shrink-0"
+                    loading={isUserLoading}
                   />
                   <div className="flex-1 space-y-2">
                     <textarea
@@ -280,7 +286,7 @@ function DashboardContent() {
                         setNewPostContent(e.target.value);
                         if (composerError) setComposerError(null);
                       }}
-                      placeholder={`What's on your mind today, ${currentUser.name.split(' ')[0]}?`}
+                      placeholder={isUserLoading ? "What's on your mind today?" : `What's on your mind today, ${currentUser.name.split(' ')[0]}?`}
                       className="w-full text-sm border-0 focus:ring-0 focus:outline-none p-1 placeholder-gray-400 resize-none font-medium text-gray-800"
                     />
 
@@ -429,6 +435,11 @@ function DashboardContent() {
                     const isCommentsOpen = activeCommentsPostId === post.id;
                     const isExpanded = !!expandedPosts[post.id];
                     const isLongContent = post.content.length > 320;
+                    // UI gate only; RLS is the real authority. Matches is_admin()
+                    // (author + admin/super_admin) — staff intentionally excluded.
+                    const canDeletePost =
+                      post.authorId === currentUser.id ||
+                      ['super_admin', 'admin'].includes(currentUser.role);
 
                     return (
                       <div
@@ -447,17 +458,29 @@ function DashboardContent() {
                         {/* Feed Header */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0">
-                            <Avatar
-                              src={post.authorAvatar}
-                              name={post.authorName}
-                              size="md"
+                            {/* Redundant with the name link below, so hidden from AT
+                                and skipped in the tab order — mouse users get both. */}
+                            <Link
+                              href={`/profile/${post.authorId}`}
                               className="shrink-0"
-                            />
+                              aria-hidden="true"
+                              tabIndex={-1}
+                            >
+                              <Avatar
+                                src={post.authorAvatar}
+                                name={post.authorName}
+                                size="md"
+                                className="shrink-0"
+                              />
+                            </Link>
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-xs font-black text-gray-900 truncate hover:underline cursor-pointer">
+                                <Link
+                                  href={`/profile/${post.authorId}`}
+                                  className="text-xs font-black text-gray-900 truncate hover:underline hover:text-brand-blue transition-colors"
+                                >
                                   {post.authorName}
-                                </span>
+                                </Link>
                                 <span className="text-gray-400 text-xs">•</span>
                                 <span className="text-[10px] text-gray-500 font-bold bg-gray-100 px-1.5 py-0.5 rounded">
                                   {post.authorRole}
@@ -476,26 +499,75 @@ function DashboardContent() {
                             </button>
                             {openMenuPostId === post.id && (
                               <>
-                                <div className="fixed inset-0 z-20" onClick={() => setOpenMenuPostId(null)} />
+                                <div
+                                  className="fixed inset-0 z-20"
+                                  onClick={() => { setOpenMenuPostId(null); setConfirmDeletePostId(null); }}
+                                />
                                 <div className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-30 text-xs font-semibold">
-                                  <button
-                                    onClick={() => { copyPostLink(post.id); setOpenMenuPostId(null); showToast('Link copied to clipboard'); }}
-                                    className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-700"
-                                  >
-                                    Copy link
-                                  </button>
-                                  <button
-                                    onClick={() => { bookmarkPost(post.id); setOpenMenuPostId(null); showToast('Saved to bookmarks'); }}
-                                    className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-700"
-                                  >
-                                    Save post
-                                  </button>
-                                  <button
-                                    onClick={() => { setOpenMenuPostId(null); showToast('Post reported to moderators'); }}
-                                    className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600"
-                                  >
-                                    Report post
-                                  </button>
+                                  {confirmDeletePostId === post.id ? (
+                                    <div className="px-3 py-2.5 space-y-2.5">
+                                      <p className="text-[11px] font-bold text-gray-700 leading-snug">
+                                        Delete this post? This can&apos;t be undone.
+                                      </p>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          disabled={deletingPostId === post.id}
+                                          onClick={async () => {
+                                            setDeletingPostId(post.id);
+                                            const res = await deletePost(post.id);
+                                            setDeletingPostId(null);
+                                            setOpenMenuPostId(null);
+                                            setConfirmDeletePostId(null);
+                                            if (res.success) showToast('Post deleted');
+                                            else showToast(res.message || 'Failed to delete post.', 'error');
+                                          }}
+                                          className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-lg px-2 py-1.5 disabled:opacity-60 transition-colors"
+                                        >
+                                          {deletingPostId === post.id ? 'Deleting…' : 'Delete'}
+                                        </button>
+                                        <button
+                                          disabled={deletingPostId === post.id}
+                                          onClick={() => setConfirmDeletePostId(null)}
+                                          className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-2 py-1.5 disabled:opacity-60 transition-colors"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <button
+                                        onClick={() => { copyPostLink(post.id); setOpenMenuPostId(null); showToast('Link copied to clipboard'); }}
+                                        className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-700"
+                                      >
+                                        Copy link
+                                      </button>
+                                      <button
+                                        onClick={() => { bookmarkPost(post.id); setOpenMenuPostId(null); showToast('Saved to bookmarks'); }}
+                                        className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-700"
+                                      >
+                                        Save post
+                                      </button>
+                                      <button
+                                        onClick={() => { setOpenMenuPostId(null); showToast('Post reported to moderators'); }}
+                                        className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600"
+                                      >
+                                        Report post
+                                      </button>
+                                      {canDeletePost && (
+                                        <>
+                                          <div className="my-1 border-t border-gray-100" />
+                                          <button
+                                            onClick={() => setConfirmDeletePostId(post.id)}
+                                            className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            Delete post
+                                          </button>
+                                        </>
+                                      )}
+                                    </>
+                                  )}
                                 </div>
                               </>
                             )}
@@ -639,6 +711,7 @@ function DashboardContent() {
                                 name={currentUser.name}
                                 size="xs"
                                 className="shrink-0 mt-1"
+                                loading={isUserLoading}
                               />
                               <div className="flex-1 flex gap-2">
                                 <input
@@ -951,8 +1024,12 @@ function DashboardContent() {
       {/* Transient toast */}
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[120] bg-brand-black text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-          <CheckCircle className="w-4 h-4 text-brand-green" />
-          {toast}
+          {toast.kind === 'error' ? (
+            <AlertCircle className="w-4 h-4 text-red-400" />
+          ) : (
+            <CheckCircle className="w-4 h-4 text-brand-green" />
+          )}
+          {toast.message}
         </div>
       )}
 

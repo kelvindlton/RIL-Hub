@@ -9,6 +9,7 @@ interface AvatarProps {
   className?: string;
   showBadge?: boolean;
   badgeColor?: string;
+  loading?: boolean;
 }
 
 const SIZE_MAP = {
@@ -56,6 +57,7 @@ export default function Avatar({
   className = '',
   showBadge = false,
   badgeColor = 'bg-green-500',
+  loading = false,
 }: AvatarProps) {
   const [hasError, setHasError] = useState(false);
   const sizeClass = SIZE_MAP[size] || SIZE_MAP.md;
@@ -63,6 +65,14 @@ export default function Avatar({
   const colorClass = getColorForName(name);
 
   const isInvalidSrc = !src || src === '/avatars/default.png' || src.trim() === '';
+
+  if (loading) {
+    return (
+      <div className={`relative inline-flex flex-shrink-0 select-none ${className}`}>
+        <div className={`${sizeClass} rounded-full bg-gray-200 animate-pulse`} aria-hidden="true" />
+      </div>
+    );
+  }
 
   return (
     <div className={`relative inline-flex flex-shrink-0 select-none ${className}`}>

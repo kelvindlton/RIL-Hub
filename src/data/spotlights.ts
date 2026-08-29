@@ -39,7 +39,7 @@ export async function fetchSpotlights(): Promise<Spotlight[]> {
       created_at,
       profiles!spotlights_user_id_fkey (
         name,
-        avatar,
+        avatar_url,
         department,
         role
       )
@@ -56,7 +56,7 @@ export async function fetchSpotlights(): Promise<Spotlight[]> {
     id: row.id,
     userId: row.user_id,
     userName: row.profiles?.name || 'Member',
-    userAvatar: row.profiles?.avatar || '',
+    userAvatar: row.profiles?.avatar_url || '',
     userDepartment: row.profiles?.department,
     userRole: row.profiles?.role,
     category: row.category,
@@ -101,7 +101,7 @@ export async function createSpotlight(params: {
       created_at,
       profiles!spotlights_user_id_fkey (
         name,
-        avatar,
+        avatar_url,
         department,
         role
       )
@@ -115,7 +115,7 @@ export async function createSpotlight(params: {
     id: row.id,
     userId: row.user_id,
     userName: row.profiles?.name || 'Member',
-    userAvatar: row.profiles?.avatar || '',
+    userAvatar: row.profiles?.avatar_url || '',
     userDepartment: row.profiles?.department,
     userRole: row.profiles?.role,
     category: row.category,

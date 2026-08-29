@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, Suspense } from 'react';
+import { use, useEffect, useState, Suspense } from 'react';
 import React from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { useApp } from '@/context/AppContext';
@@ -11,6 +11,7 @@ import Avatar from '@/components/common/Avatar';
 import EmptyState from '@/components/common/EmptyState';
 import ErrorState from '@/components/common/ErrorState';
 import { ProfileSkeleton } from '@/components/common/Skeletons';
+import EditProfileModal from '@/components/profile/EditProfileModal';
 import {
   ArrowLeft,
   Mail,
@@ -29,7 +30,11 @@ import {
   Calendar,
   Star,
   Send,
-  CheckCircle
+  CheckCircle,
+  Pencil,
+  User,
+  GitBranch,
+  Globe
 } from 'lucide-react';
 
 const CONFETTI_COLORS = [
@@ -132,14 +137,18 @@ function useConfetti(active: boolean) {
 }
 
 function ProfileContent({ id }: { id: string }) {
-  const { profiles, posts, currentUser, isLoading, isError, errorMessage, refetchData, likePost, bookmarkPost } = useApp();
+  const { profiles, posts, currentUser, isUserLoading, isLoading, isError, errorMessage, refetchData, likePost, bookmarkPost, updateOwnProfile } = useApp();
   const searchParams = useSearchParams();
   const celebrate = searchParams.get('celebrate') === 'true';
+  const [isEditOpen, setIsEditOpen] = useState(false);
 
   useConfetti(celebrate);
 
   const profile = profiles.find((p) => p.id === id);
-  const isOwnProfile = currentUser.id === id;
+  // Not trustworthy until auth resolves: currentUser is seeded with a mock profile
+  // (AppContext initialProfiles[0]) for first paint, so this would read false on a
+  // fresh load of your OWN profile and flash the "Send DM" button.
+  const isOwnProfile = !isUserLoading && currentUser.id === id;
   const userPosts = posts.filter((p) => p.authorId === id);
 
   const getRoleBadgeColor = (role: string) => {
@@ -158,6 +167,7 @@ function ProfileContent({ id }: { id: string }) {
     return role.charAt(0).toUpperCase() + role.slice(1);
   };
 
+  // Fallback only — used when a member hasn't written their own headline yet.
   const getRoleTagline = (role: string, dept?: string) => {
     const department = dept || 'General Cohort';
     switch (role) {
@@ -205,6 +215,18 @@ function ProfileContent({ id }: { id: string }) {
       </DashboardLayout>
     );
   }
+
+  // The DB CHECKs constrain these to http(s), but re-validate before emitting an
+  // href: a link is rendered only if it passes here too, so a value predating the
+  // constraint (or arriving by some other path) can never become a javascript: href.
+  const safeUrl = (url?: string) => (url && /^https?:\/\//i.test(url) ? url : null);
+  // lucide-react 1.x dropped brand glyphs (no Linkedin/Github export), so these use
+  // the closest generic icons — the visible label carries the identification.
+  const socialLinks = [
+    { label: 'LinkedIn', url: safeUrl(profile.linkedinUrl), icon: Briefcase },
+    { label: 'GitHub', url: safeUrl(profile.githubUrl), icon: GitBranch },
+    { label: 'Website', url: safeUrl(profile.websiteUrl), icon: Globe },
+  ].filter((link) => link.url);
 
   return (
     <DashboardLayout>
@@ -272,14 +294,31 @@ function ProfileContent({ id }: { id: string }) {
 
               {/* Action buttons */}
               <div className="flex items-center gap-2 sm:mb-1">
-                {isOwnProfile ? (
-                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-sky-blue bg-sky-blue/10 border border-sky-blue/20 px-3 py-1.5 rounded-full">
-                    <Star className="w-3 h-3" />
-                    Your Profile
-                  </span>
+                {isUserLoading ? (
+                  // Auth unresolved — neither branch below is trustworthy yet. Sized to
+                  // the Send DM button's footprint so resolving causes no layout shift.
+                  <span
+                    className="inline-block w-28 h-8 bg-white/20 animate-pulse rounded-xl"
+                    aria-hidden="true"
+                  />
+                ) : isOwnProfile ? (
+                  <>
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-sky-blue bg-sky-blue/10 border border-sky-blue/20 px-3 py-1.5 rounded-full">
+                      <Star className="w-3 h-3" />
+                      Your Profile
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditOpen(true)}
+                      className="flex items-center gap-1.5 bg-brand-blue text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-blue-600 transition-colors shadow-sm cursor-pointer"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Edit Profile
+                    </button>
+                  </>
                 ) : (
                   <Link
-                    href={`/messages?tab=dms`}
+                    href={`/messages?tab=dms&user=${profile.id}`}
                     className="flex items-center gap-1.5 bg-brand-blue text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-blue-600 transition-colors shadow-sm"
                   >
                     <Send className="w-3.5 h-3.5" />
@@ -297,7 +336,9 @@ function ProfileContent({ id }: { id: string }) {
                   {getRoleName(profile.role)}
                 </span>
               </div>
-              <p className="text-sky-blue text-xs font-semibold">{getRoleTagline(profile.role, profile.department)}</p>
+              <p className="text-sky-blue text-xs font-semibold">
+                {profile.headline || getRoleTagline(profile.role, profile.department)}
+              </p>
               <div className="flex flex-wrap items-center gap-3 text-[10.5px] font-semibold text-gray-400 mt-1">
                 <span className="flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5 shrink-0" />
@@ -337,6 +378,37 @@ function ProfileContent({ id }: { id: string }) {
 
           {/* ── Left: Main content ── */}
           <div className="lg:col-span-2 space-y-6">
+
+            {/* About — bio + social links; hidden entirely when the member has neither */}
+            {(profile.bio || socialLinks.length > 0) && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-3.5">
+                <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
+                  <User className="w-4 h-4 text-brand-blue shrink-0" />
+                  <h3 className="text-xs font-extrabold text-gray-900 uppercase tracking-widest">About</h3>
+                </div>
+                {profile.bio && (
+                  <p className="text-xs text-gray-700 font-medium leading-relaxed whitespace-pre-wrap break-words">
+                    {profile.bio}
+                  </p>
+                )}
+                {socialLinks.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {socialLinks.map((link) => (
+                      <a
+                        key={link.label}
+                        href={link.url!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-brand-blue/5 text-gray-700 hover:text-brand-blue text-xs font-bold px-3 py-1.5 rounded-full border border-gray-200 hover:border-brand-blue/20 transition-colors"
+                      >
+                        <link.icon className="w-3.5 h-3.5" />
+                        {link.label}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Core Skills */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm space-y-3.5">
@@ -522,6 +594,16 @@ function ProfileContent({ id }: { id: string }) {
           </div>
         </div>
       </div>
+
+      {/* Mounted only while open so each open reseeds from the saved profile */}
+      {isOwnProfile && isEditOpen && (
+        <EditProfileModal
+          open={isEditOpen}
+          onClose={() => setIsEditOpen(false)}
+          profile={profile}
+          onSubmit={updateOwnProfile}
+        />
+      )}
     </DashboardLayout>
   );
 }

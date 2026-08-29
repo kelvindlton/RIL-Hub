@@ -46,6 +46,7 @@ export interface DailyCheckInStatus {
 
 interface AppContextType {
   currentUser: UserProfile;
+  isUserLoading: boolean;
   profiles: UserProfile[];
   events: Event[];
   posts: Post[];
@@ -64,6 +65,7 @@ interface AppContextType {
   likePost: (postId: string) => Promise<void>;
   bookmarkPost: (postId: string) => Promise<void>;
   addComment: (postId: string, content: string) => Promise<void>;
+  deletePost: (postId: string) => Promise<{ success: boolean; message?: string }>;
   toggleRsvp: (eventId: string) => Promise<void>;
   checkInUser: (eventId: string, userId: string, method: 'qr' | 'manual') => Promise<{ success: boolean; message: string }>;
   recordDailyCheckIn: (userId: string, lat?: number, lon?: number) => Promise<{ success: boolean; message?: string }>;
@@ -72,6 +74,7 @@ interface AppContextType {
   refetchHubEngagement: () => Promise<void>;
   addEvent: (eventData: Omit<Event, 'id' | 'rsvpCount' | 'isRsvped' | 'checkedInUsers'>) => Promise<void>;
   addSpotlight: (params: { userId: string; category: string; badgeLabel: string; quote: string; tags: string[]; theme: 'blue' | 'white' }) => Promise<void>;
+  updateOwnProfile: (updates: Partial<Omit<UserProfile, 'id' | 'points' | 'streak' | 'role'>>) => Promise<void>;
   addWelfareRequest: (type: 'welfare' | 'suggestion', title: string, content: string, priority: 'low' | 'medium' | 'high' | 'critical') => Promise<void>;
   addComplaint: (title: string, content: string, priority: 'low' | 'medium' | 'high' | 'critical') => Promise<string>;
   updateWelfareStatus: (requestId: string, status: 'open' | 'in_progress' | 'resolved') => Promise<void>;
@@ -513,6 +516,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const deletePost = async (postId: string): Promise<{ success: boolean; message?: string }> => {
+    // Deliberately NOT optimistic. Unlike addPost/likePost (which keep a local
+    // fallback on error), a delete must await the DB and only drop the post from
+    // state on a confirmed success — a failed or RLS-blocked delete has to leave
+    // the post visible and surface a real error, never silently disappear it.
+    try {
+      await postsData.deletePost(postId);
+      setPosts(prev => prev.filter(p => p.id !== postId));
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Failed to delete post.' };
+    }
+  };
+
   const toggleRsvp = async (eventId: string) => {
     const targetEvent = events.find(e => e.id === eventId);
     const isRsvped = targetEvent?.isRsvped || false;
@@ -752,10 +769,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Edits the SIGNED-IN member's own profile. Keys off authUserId, never
+  // currentUser.id — currentUser is seeded with the mock 'user-sarah' until auth
+  // resolves, and .eq('id', 'user-sarah') against a uuid column returns 400. That
+  // also makes this correctly refuse to run before auth resolves.
+  //
+  // Server-side scope is enforced by RLS (own-profile UPDATE) plus the
+  // guard_profile_role_points trigger; nothing here is trusted to restrict fields.
+  // Syncs currentUser and the profiles array from the RETURNED row so the profile
+  // page and directory reflect the edit with no refetch, and no client-side cache:
+  // the mapped server row is the only thing written to state.
+  const updateOwnProfile = async (
+    updates: Partial<Omit<UserProfile, 'id' | 'points' | 'streak' | 'role'>>
+  ) => {
+    if (!authUserId) {
+      throw new Error('You must be signed in to edit your profile.');
+    }
+    try {
+      const updated = await profilesData.updateProfile(authUserId, updates);
+      setCurrentUserState(updated);
+      setProfiles(prev => prev.map(p => (p.id === updated.id ? updated : p)));
+    } catch (err) {
+      console.error('Failed to update profile:', err);
+      throw err;
+    }
+  };
+
+  // True while we don't yet have the real authenticated profile loaded. Covers
+  // authUserId === undefined (auth unresolved), null (signed-out / auth failure),
+  // and the gap where authUserId is a UUID but fetchProfileById hasn't updated
+  // currentUser yet. Only currentUser.id === authUserId is trustworthy, so identity
+  // displays gate on this and never render the seeded mock profile. Consistent with
+  // the "empty collections + skeleton over mock data" choice above.
+  const isUserLoading = !authUserId || currentUser.id !== authUserId;
+
   return (
     <AppContext.Provider
       value={{
         currentUser,
+        isUserLoading,
         profiles,
         events,
         posts,
@@ -774,6 +826,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         likePost,
         bookmarkPost,
         addComment,
+        deletePost,
         toggleRsvp,
         checkInUser,
         recordDailyCheckIn,
@@ -782,6 +835,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         refetchHubEngagement,
         addEvent,
         addSpotlight,
+        updateOwnProfile,
         addWelfareRequest,
         addComplaint,
         updateWelfareStatus,

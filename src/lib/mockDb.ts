@@ -7,6 +7,11 @@ export interface UserProfile {
   phone: string;
   department: string;
   programCohort: string;
+  headline?: string;      // Self-authored tagline; falls back to a derived role string
+  bio?: string;           // About text, max 500 chars (DB-enforced)
+  linkedinUrl?: string;   // http(s) only (DB-enforced)
+  githubUrl?: string;     // http(s) only (DB-enforced)
+  websiteUrl?: string;    // http(s) only (DB-enforced)
   skills: string[];
   interests: string[];
   points: number;

@@ -168,7 +168,7 @@ function ContextualNavbar() {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { currentUser, profiles, posts, events, notifications, unreadCount, markAllRead, markRead, recordDailyCheckIn, getDailyCheckInStatus } = useApp();
+  const { currentUser, isUserLoading, profiles, posts, events, notifications, unreadCount, markAllRead, markRead, recordDailyCheckIn, getDailyCheckInStatus } = useApp();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
@@ -300,9 +300,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="flex items-center gap-2 md:gap-3">
           {/* USER ROLE BADGE */}
           <div className="mr-2 hidden sm:block">
-            <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-sky-blue/10 text-sky-blue border border-sky-blue/20">
-              {getRoleName(currentUser.role)}
-            </span>
+            {isUserLoading ? (
+              <span className="inline-block w-14 h-6 bg-gray-100 animate-pulse rounded-lg" aria-hidden="true" />
+            ) : (
+              <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-sky-blue/10 text-sky-blue border border-sky-blue/20">
+                {getRoleName(currentUser.role)}
+              </span>
+            )}
           </div>
 
           {/* NOTIFICATION BELL */}
@@ -480,6 +484,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 name={currentUser.name}
                 size="sm"
                 className="shrink-0"
+                loading={isUserLoading}
               />
             </button>
 
@@ -488,7 +493,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 <div className="px-4 py-2 border-b border-gray-100 bg-gray-50/50">
                   <span className="text-[9px] uppercase font-bold tracking-widest text-gray-400 block">Digital Passport</span>
                   <span className="text-[11px] font-bold text-brand-blue block mt-0.5">
-                    {currentUser.points} Participation Points
+                    {isUserLoading
+                      ? <span className="inline-block w-24 h-3 bg-gray-200 animate-pulse rounded align-middle" aria-hidden="true" />
+                      : `${currentUser.points} Participation Points`}
                   </span>
                 </div>
                 <Link
@@ -606,9 +613,15 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                     </div>
 
                     <div className="flex items-center gap-2.5 mb-3">
-                      <img src={currentUser.avatar} alt={currentUser.name} className="w-8 h-8 rounded-full border-2 border-brand-green/30" />
+                      {isUserLoading ? (
+                        <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" aria-hidden="true" />
+                      ) : (
+                        <img src={currentUser.avatar} alt={currentUser.name} className="w-8 h-8 rounded-full border-2 border-brand-green/30" />
+                      )}
                       <div>
-                        <p className="text-[11px] font-extrabold text-gray-900 leading-tight">{currentUser.name}</p>
+                        <p className="text-[11px] font-extrabold text-gray-900 leading-tight">
+                          {isUserLoading ? <span className="inline-block w-20 h-3 bg-gray-200 animate-pulse rounded" aria-hidden="true" /> : currentUser.name}
+                        </p>
                         <p className="text-[9.5px] text-gray-400 font-semibold">{checkInStatus.checkInTime && `Checked in · ${checkInStatus.checkInTime}`}</p>
                       </div>
                     </div>

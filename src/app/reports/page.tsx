@@ -346,7 +346,7 @@ function ExportTab() {
 
 function ReportsPage() {
   const searchParams = useSearchParams();
-  const { currentUser } = useApp();
+  const { currentUser, isUserLoading } = useApp();
 
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'super_admin';
 
@@ -358,7 +358,7 @@ function ReportsPage() {
           <div>
             <h3 className="text-base font-extrabold text-gray-900">Access Denied</h3>
             <p className="text-xs text-gray-500 mt-2">
-              The Reports & Analytics dashboard contains confidential community metric spreadsheets and operational growth charts. Your current account role ({currentUser.role}) does not have administrative permissions.
+              The Reports &amp; Analytics dashboard contains confidential community metric spreadsheets and operational growth charts. Your current account role ({isUserLoading ? <span className="inline-block w-12 h-3 bg-gray-200 animate-pulse rounded align-middle" aria-hidden="true" /> : currentUser.role}) does not have administrative permissions.
             </p>
           </div>
           <div className="bg-red-50/50 rounded-xl p-3 text-[10.5px] font-semibold text-red-600 border border-red-100 flex items-center justify-center gap-1.5">

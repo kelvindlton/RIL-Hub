@@ -436,24 +436,30 @@ function ChannelsTab() {
 }
 
 // --- TAB: Private DMs ---
-function DMsTab() {
+function DMsTab({ initialUserId }: { initialUserId?: string | null }) {
   const { currentUser, profiles } = useApp();
 
-  const [selectedContact, setSelectedContact] = useState<string | null>(null);
+  // Seeded from the ?user= deep link (the "Send DM" button on a profile) so the
+  // intended conversation opens instead of an arbitrary first contact.
+  const [selectedContact, setSelectedContact] = useState<string | null>(initialUserId ?? null);
   const [draftMessage, setDraftMessage] = useState('');
   const [contactSearch, setContactSearch] = useState('');
   const [dmMessages, setDmMessages] = useState<{ [contactId: string]: ChatMessage[] }>({});
   const [showSidebar, setShowSidebar] = useState(true);
 
-  const dmContacts = profiles
-    .filter(p => p.id !== currentUser.id)
-    .filter(p =>
-      p.name.toLowerCase().includes(contactSearch.toLowerCase()) ||
-      p.role.toLowerCase().includes(contactSearch.toLowerCase()) ||
-      p.department.toLowerCase().includes(contactSearch.toLowerCase())
-    );
+  // Everyone messageable — independent of the sidebar search box.
+  const allContacts = profiles.filter(p => p.id !== currentUser.id);
 
-  const contact = dmContacts.find(p => p.id === selectedContact) || dmContacts[0];
+  // Search narrows only what the sidebar LISTS, never which thread is open.
+  const dmContacts = allContacts.filter(p =>
+    p.name.toLowerCase().includes(contactSearch.toLowerCase()) ||
+    p.role.toLowerCase().includes(contactSearch.toLowerCase()) ||
+    p.department.toLowerCase().includes(contactSearch.toLowerCase())
+  );
+
+  // Resolve against the UNFILTERED list: this previously read from dmContacts, so
+  // typing a search that excluded the open contact silently switched the thread.
+  const contact = allContacts.find(p => p.id === selectedContact) || allContacts[0];
   const activeMessages = contact ? (dmMessages[contact.id] || []) : [];
 
   const handleSendDM = (e: React.FormEvent) => {
@@ -620,6 +626,8 @@ function DMsTab() {
 function MessagesContent() {
   const searchParams = useSearchParams();
   const tab = searchParams.get('tab') || 'channels';
+  // Target member for a DM deep link: /messages?tab=dms&user=<profileId>
+  const targetUserId = searchParams.get('user');
 
   return (
     <DashboardLayout>
@@ -632,7 +640,7 @@ function MessagesContent() {
         </div>
 
         {tab === 'dms' ? (
-          <DMsTab />
+          <DMsTab initialUserId={targetUserId} />
         ) : (
           <ChannelsTab />
         )}

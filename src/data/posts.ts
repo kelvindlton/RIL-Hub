@@ -153,3 +153,24 @@ export async function addCommentToPost(postId: string, content: string) {
 
   return data;
 }
+
+export async function deletePost(postId: string) {
+  const supabase = createClient();
+
+  // Chain .select() so we can tell a real deletion apart from an RLS-filtered
+  // no-op: supabase-js returns { data: [], error: null } when a DELETE matches
+  // zero rows because RLS hid them — it does NOT throw. So treat "0 rows
+  // returned" as a failure rather than a silent success.
+  const { data, error } = await supabase
+    .from('posts')
+    .delete()
+    .eq('id', postId)
+    .select('id');
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error("Post couldn't be deleted — you may not have permission, or it no longer exists.");
+  }
+
+  return data[0];
+}
