@@ -137,7 +137,7 @@ function useConfetti(active: boolean) {
 }
 
 function ProfileContent({ id }: { id: string }) {
-  const { profiles, posts, currentUser, isUserLoading, isLoading, isError, errorMessage, refetchData, likePost, bookmarkPost, updateOwnProfile } = useApp();
+  const { profiles, posts, currentUser, isUserLoading, isLoading, isError, errorMessage, refetchData, likePost, bookmarkPost, updateOwnProfile, uploadOwnAvatar } = useApp();
   const searchParams = useSearchParams();
   const celebrate = searchParams.get('celebrate') === 'true';
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -284,6 +284,8 @@ function ProfileContent({ id }: { id: string }) {
                   name={profile.name}
                   size="2xl"
                   className="border-4 border-brand-black shadow-xl"
+                  viewable
+                  editable={isOwnProfile}
                 />
                 {profile.streak > 0 && (
                   <span className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-orange-500 border-2 border-brand-black flex items-center justify-center shadow-sm">
@@ -473,7 +475,7 @@ function ProfileContent({ id }: { id: string }) {
                 userPosts.map((post) => (
                   <div key={post.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
                     <div className="flex items-center gap-3">
-                      <Avatar src={post.authorAvatar} name={post.authorName} size="sm" />
+                      <Avatar src={post.authorAvatar} name={post.authorName} size="sm" viewable />
                       <div>
                         <span className="text-xs font-bold text-gray-900">{post.authorName}</span>
                         <span className="text-[10px] text-gray-400 block">{post.timestamp}</span>
@@ -586,7 +588,7 @@ function ProfileContent({ id }: { id: string }) {
                 Building the future of tech in Port Harcourt and beyond.
               </p>
               <div className="mt-4 flex items-center gap-2">
-                <Avatar src={profile.avatar} name={profile.name} size="xs" className="border border-white/30" />
+                <Avatar src={profile.avatar} name={profile.name} size="xs" className="border border-white/30" viewable />
                 <span className="text-[10.5px] font-bold text-white/90">{profile.programCohort}</span>
               </div>
             </div>
@@ -602,6 +604,7 @@ function ProfileContent({ id }: { id: string }) {
           onClose={() => setIsEditOpen(false)}
           profile={profile}
           onSubmit={updateOwnProfile}
+          onUploadAvatar={uploadOwnAvatar}
         />
       )}
     </DashboardLayout>

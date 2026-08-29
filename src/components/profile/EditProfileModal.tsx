@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
-import { X, UserCog, AlertCircle } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { X, UserCog, AlertCircle, Camera } from 'lucide-react';
 import type { UserProfile } from '@/lib/mockDb';
+import Avatar from '@/components/common/Avatar';
+import { ACCEPTED_IMAGE_TYPES, downscaleImage, validateImageFile } from '@/lib/image';
+import AvatarCropModal from '@/components/profile/AvatarCropModal';
 
 // Mirrors the DB CHECKs from 20260828000000_profile_bio_and_socials.sql so a bad
 // value gets a readable message here instead of surfacing as a Postgres constraint
@@ -11,6 +14,9 @@ const HEADLINE_MAX = 120;
 const BIO_MAX = 500;
 const URL_RE = /^https?:\/\//i;
 
+// ACCEPTED_IMAGE_TYPES / MAX_SOURCE_BYTES / validateImageFile moved to
+// @/lib/image — the avatar viewer picks files too, and the rules must not drift.
+
 type ProfileEdits = Partial<Omit<UserProfile, 'id' | 'points' | 'streak' | 'role'>>;
 
 interface EditProfileModalProps {
@@ -18,12 +24,13 @@ interface EditProfileModalProps {
   onClose: () => void;
   profile: UserProfile;
   onSubmit: (updates: ProfileEdits) => Promise<void>;
+  onUploadAvatar: (image: Blob) => Promise<string>;
 }
 
 const inputClass =
   'w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-semibold text-gray-800 focus:outline-none focus:ring-2 focus:ring-brand-blue/20';
 
-export function EditProfileModal({ open, onClose, profile, onSubmit }: EditProfileModalProps) {
+export function EditProfileModal({ open, onClose, profile, onSubmit, onUploadAvatar }: EditProfileModalProps) {
   // Seeded from `profile` at mount. The parent mounts this only while open, so every
   // open starts from the saved values — cancelling never leaves stale edits behind.
   const [name, setName] = useState(profile.name);
@@ -39,10 +46,57 @@ export function EditProfileModal({ open, onClose, profile, onSubmit }: EditProfi
   const [websiteUrl, setWebsiteUrl] = useState(profile.websiteUrl || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // pendingFile is the raw pick, held only while the crop modal is open.
+  // croppedAvatar is what comes back OUT of the cropper — that is what gets
+  // uploaded, and avatarPreview is an object URL for it. uploadedAvatarUrl caches
+  // a SUCCESSFUL upload, so if the profile save then fails, pressing Save Changes
+  // again reuses the stored file rather than uploading the same bytes twice.
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [croppedAvatar, setCroppedAvatar] = useState<Blob | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [uploadedAvatarUrl, setUploadedAvatarUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!open) return null;
 
   const parseList = (raw: string) => raw.split(',').map((s) => s.trim()).filter(Boolean);
+
+  // Object URLs are revoked the moment they're replaced or discarded. Doing that
+  // in the handlers rather than a useEffect cleanup keeps this component free of
+  // effects (the project lints react-hooks/set-state-in-effect as an error).
+  const handlePickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Clear the input so the SAME file can be picked again after a rejection —
+    // otherwise re-choosing it fires no change event.
+    e.target.value = '';
+    if (!file) return;
+
+    const problem = validateImageFile(file);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+
+    // No preview yet — the member crops first, and the CROP is what gets
+    // previewed and uploaded.
+    setError(null);
+    setPendingFile(file);
+  };
+
+  const handleCropSave = (cropped: Blob) => {
+    if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+    setPendingFile(null);
+    setCroppedAvatar(cropped);
+    setAvatarPreview(URL.createObjectURL(cropped));
+    setUploadedAvatarUrl(null);   // any earlier upload no longer matches the pick
+  };
+
+  const clearPickedFile = () => {
+    if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+    setCroppedAvatar(null);
+    setAvatarPreview(null);
+    setUploadedAvatarUrl(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,9 +127,28 @@ export function EditProfileModal({ open, onClose, profile, onSubmit }: EditProfi
     }
 
     setIsSubmitting(true);
+
+    // Photo first, row second: avatar_url must never name a file that isn't in
+    // storage yet. A cached uploadedAvatarUrl means this is a retry.
+    let avatarUrl = uploadedAvatarUrl;
+    if (croppedAvatar && !avatarUrl) {
+      try {
+        const image = await downscaleImage(croppedAvatar);
+        avatarUrl = await onUploadAvatar(image);
+        setUploadedAvatarUrl(avatarUrl);
+      } catch (err: unknown) {
+        // FAILURE MODE 1 — the profile row is deliberately left untouched.
+        const detail = err instanceof Error ? err.message : 'Please try again.';
+        setError(`Your photo could not be uploaded, so nothing was saved. ${detail}`);
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
     try {
       // Blank strings are intentional: updateProfile() converts them to NULL, which
-      // is how a member clears a field.
+      // is how a member clears a field. `avatar` is included ONLY when a new photo
+      // was actually uploaded — otherwise the existing avatar_url is left alone.
       await onSubmit({
         name: name.trim(),
         headline: headline.trim(),
@@ -88,10 +161,18 @@ export function EditProfileModal({ open, onClose, profile, onSubmit }: EditProfi
         linkedinUrl: linkedinUrl.trim(),
         githubUrl: githubUrl.trim(),
         websiteUrl: websiteUrl.trim(),
+        ...(avatarUrl ? { avatar: avatarUrl } : {}),
       });
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to save your profile. Please try again.');
+      // FAILURE MODE 2 — the file IS in storage but the row doesn't point at it.
+      // Say so plainly; uploadedAvatarUrl makes the retry reuse the stored file.
+      const detail = err instanceof Error ? err.message : 'Failed to save your profile. Please try again.';
+      setError(
+        avatarUrl
+          ? `Your new photo uploaded, but your profile details didn't save. ${detail} Press Save Changes to try again — your photo is already stored.`
+          : detail
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -127,6 +208,51 @@ export function EditProfileModal({ open, onClose, profile, onSubmit }: EditProfi
               <span>{error}</span>
             </div>
           )}
+          {/* Photo — picked and previewed here, uploaded on submit */}
+          <div className="flex items-center gap-4 pb-1">
+            {/* key remounts Avatar per src: its internal error flag never resets,
+                so without this one failed preview would show initials until the
+                modal was closed and reopened. */}
+            <Avatar
+              key={avatarPreview || profile.avatar}
+              src={avatarPreview || profile.avatar}
+              name={profile.name}
+              size="xl"
+              className="shrink-0"
+            />
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  {croppedAvatar ? 'Choose a different photo' : 'Change photo'}
+                </button>
+                {croppedAvatar && (
+                  <button
+                    type="button"
+                    onClick={clearPickedFile}
+                    className="text-gray-500 hover:text-gray-700 font-bold px-2 py-2 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
+                  >
+                    Keep current
+                  </button>
+                )}
+              </div>
+              <p className="text-[9.5px] text-gray-400 font-semibold">
+                PNG, JPEG or WebP. You&apos;ll be able to crop and rotate it — nothing is uploaded until you save.
+              </p>
+              {/* accept= is a hint only; handlePickFile re-checks type and size. */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPTED_IMAGE_TYPES.join(',')}
+                onChange={handlePickFile}
+                className="hidden"
+              />
+            </div>
+          </div>
           {/* Name */}
           <div>
             <label className="font-bold text-gray-700 block mb-1.5">Full Name</label>
@@ -254,11 +380,23 @@ export function EditProfileModal({ open, onClose, profile, onSubmit }: EditProfi
               className="bg-brand-blue hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-md shadow-brand-blue/20 flex items-center gap-1.5 cursor-pointer"
             >
               <UserCog className="w-3.5 h-3.5" />
-              {isSubmitting ? 'Saving...' : 'Save Changes'}
+              {isSubmitting
+                ? croppedAvatar && !uploadedAvatarUrl
+                  ? 'Uploading photo...'
+                  : 'Saving...'
+                : 'Save Changes'}
             </button>
           </div>
         </form>
       </div>
+
+      {pendingFile && (
+        <AvatarCropModal
+          file={pendingFile}
+          onCancel={() => setPendingFile(null)}
+          onSave={handleCropSave}
+        />
+      )}
     </div>
   );
 }

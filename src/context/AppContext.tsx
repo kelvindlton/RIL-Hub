@@ -11,10 +11,12 @@ import {
   initialProfiles,
 } from '@/lib/mockDb';
 import { createClient } from '@/utils/supabase/client';
+import { DEFAULT_AVATAR } from '@/lib/avatar';
 import * as postsData from '@/data/posts';
 import * as eventsData from '@/data/events';
 import * as welfareData from '@/data/welfare';
 import * as profilesData from '@/data/profiles';
+import * as avatarsData from '@/data/avatars';
 import * as attendanceData from '@/data/attendance';
 import * as spotlightsData from '@/data/spotlights';
 import type { Spotlight } from '@/data/spotlights';
@@ -75,6 +77,9 @@ interface AppContextType {
   addEvent: (eventData: Omit<Event, 'id' | 'rsvpCount' | 'isRsvped' | 'checkedInUsers'>) => Promise<void>;
   addSpotlight: (params: { userId: string; category: string; badgeLabel: string; quote: string; tags: string[]; theme: 'blue' | 'white' }) => Promise<void>;
   updateOwnProfile: (updates: Partial<Omit<UserProfile, 'id' | 'points' | 'streak' | 'role'>>) => Promise<void>;
+  uploadOwnAvatar: (image: Blob) => Promise<string>;
+  setOwnAvatar: (image: Blob) => Promise<void>;
+  removeOwnAvatar: () => Promise<void>;
   addWelfareRequest: (type: 'welfare' | 'suggestion', title: string, content: string, priority: 'low' | 'medium' | 'high' | 'critical') => Promise<void>;
   addComplaint: (title: string, content: string, priority: 'low' | 'medium' | 'high' | 'critical') => Promise<string>;
   updateWelfareStatus: (requestId: string, status: 'open' | 'in_progress' | 'resolved') => Promise<void>;
@@ -795,6 +800,83 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Uploads a new avatar for the SIGNED-IN member and returns its public URL.
+  // Same authUserId guard as updateOwnProfile, for the same reason: the storage
+  // path IS the ownership claim, and currentUser.id is the seeded mock id until
+  // auth resolves.
+  //
+  // Deliberately does NOT write profiles.avatar_url — the caller submits the URL
+  // with the rest of the form through updateOwnProfile. Keeping the two calls
+  // separate is what lets the modal distinguish "the photo never uploaded, so
+  // nothing was saved" from "the photo uploaded but the profile row didn't save";
+  // one combined action could only report a single, ambiguous failure.
+  const uploadOwnAvatar = async (image: Blob): Promise<string> => {
+    if (!authUserId) {
+      throw new Error('You must be signed in to change your photo.');
+    }
+    try {
+      return await avatarsData.uploadAvatar(authUserId, image);
+    } catch (err) {
+      console.error('Failed to upload avatar:', err);
+      throw err;
+    }
+  };
+
+  // The viewer's equivalent of uploadOwnAvatar + updateOwnProfile in one call.
+  // EditProfileModal keeps them separate because it has a Save button and other
+  // fields to save; the avatar viewer has neither — the photo IS the whole edit —
+  // so it needs one action that finishes the job.
+  //
+  // The two failure modes stay distinguishable, which is why this doesn't just
+  // chain the two promises: the messages below are the only way the member can
+  // tell "nothing changed" from "your photo is stored but your profile still
+  // points at the old one".
+  const setOwnAvatar = async (image: Blob): Promise<void> => {
+    if (!authUserId) {
+      throw new Error('You must be signed in to change your photo.');
+    }
+
+    let url: string;
+    try {
+      url = await avatarsData.uploadAvatar(authUserId, image);
+    } catch (err) {
+      console.error('Failed to upload avatar:', err);
+      const detail = err instanceof Error ? err.message : 'Please try again.';
+      throw new Error(`Your photo could not be uploaded, so nothing was changed. ${detail}`);
+    }
+
+    try {
+      // Syncs currentUser and the profiles array from the returned row, so every
+      // avatar on screen updates without a refetch.
+      await updateOwnProfile({ avatar: url });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Please try again.';
+      throw new Error(`Your photo uploaded, but your profile didn't update. ${detail}`);
+    }
+  };
+
+  // Row FIRST, object second — deliberately the inverse of the upload order.
+  //
+  // If the row reset succeeds and the delete fails, the result is an orphaned
+  // object nobody references, and the next upload upserts over it at the same
+  // fixed path. The other order risks a row naming a file that no longer exists,
+  // which is a broken image for every member who sees this avatar. So the delete
+  // failure is logged and swallowed: the member's photo IS gone as far as the app
+  // is concerned, and telling them it failed would be wrong.
+  const removeOwnAvatar = async (): Promise<void> => {
+    if (!authUserId) {
+      throw new Error('You must be signed in to change your photo.');
+    }
+
+    await updateOwnProfile({ avatar: DEFAULT_AVATAR });
+
+    try {
+      await avatarsData.deleteAvatar(authUserId);
+    } catch (err) {
+      console.error('Avatar reset, but the stored file could not be deleted:', err);
+    }
+  };
+
   // True while we don't yet have the real authenticated profile loaded. Covers
   // authUserId === undefined (auth unresolved), null (signed-out / auth failure),
   // and the gap where authUserId is a UUID but fetchProfileById hasn't updated
@@ -836,6 +918,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addEvent,
         addSpotlight,
         updateOwnProfile,
+        uploadOwnAvatar,
+        setOwnAvatar,
+        removeOwnAvatar,
         addWelfareRequest,
         addComplaint,
         updateWelfareStatus,

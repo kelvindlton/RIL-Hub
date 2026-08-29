@@ -309,6 +309,7 @@ function ChannelsTab() {
                       name={msg.senderName}
                       size="sm"
                       className="shrink-0 mt-0.5"
+                      viewable
                     />
                     <div className="space-y-1 min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -554,7 +555,7 @@ function DMsTab({ initialUserId }: { initialUserId?: string | null }) {
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <Avatar src={contact.avatar} name={contact.name} size="md" className="shrink-0" />
+              <Avatar src={contact.avatar} name={contact.name} size="md" className="shrink-0" viewable />
               <div className="min-w-0 flex-1">
                 <h3 className="font-extrabold text-sm text-gray-900 truncate">{contact.name}</h3>
                 <p className="text-[10px] text-gray-400 font-medium capitalize truncate">{contact.role} · {contact.department}</p>
@@ -577,6 +578,7 @@ function DMsTab({ initialUserId }: { initialUserId?: string | null }) {
                       name={msg.senderName}
                       size="sm"
                       className="shrink-0 mt-0.5"
+                      viewable
                     />
                     <div className="space-y-1">
                       <p className="text-xs text-white bg-brand-blue rounded-xl p-3 leading-relaxed font-medium break-words shadow-sm">

@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
+import { getColorForName, getInitials, isPlaceholderAvatar } from '@/lib/avatar';
+import AvatarViewerModal from '@/components/common/AvatarViewerModal';
 
 interface AvatarProps {
   src?: string | null;
@@ -10,6 +12,14 @@ interface AvatarProps {
   showBadge?: boolean;
   badgeColor?: string;
   loading?: boolean;
+  /** Opt-in: clicking opens a read-only viewer. NOT safe inside a <button> or
+   *  <Link> — several call sites are wrapped that way and are deliberately left
+   *  alone (nested interactive elements, and the click would steal the parent's
+   *  navigate affordance). */
+  viewable?: boolean;
+  /** Adds Change/Remove photo to the viewer. Only ever true where the call site
+   *  knows this avatar belongs to the signed-in member. */
+  editable?: boolean;
 }
 
 const SIZE_MAP = {
@@ -21,34 +31,8 @@ const SIZE_MAP = {
   '2xl': 'w-24 h-24 text-3xl',
 };
 
-// Deterministic pastel/brand color palette based on name hash
-const BG_COLORS = [
-  'bg-blue-600 text-white',
-  'bg-indigo-600 text-white',
-  'bg-emerald-600 text-white',
-  'bg-amber-600 text-white',
-  'bg-purple-600 text-white',
-  'bg-rose-600 text-white',
-  'bg-cyan-600 text-white',
-  'bg-teal-600 text-white',
-];
-
-function getInitials(name?: string): string {
-  if (!name || !name.trim()) return 'U';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-function getColorForName(name?: string): string {
-  if (!name) return BG_COLORS[0];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const index = Math.abs(hash) % BG_COLORS.length;
-  return BG_COLORS[index];
-}
+// getInitials / getColorForName / isPlaceholderAvatar live in @/lib/avatar so
+// AvatarViewerModal can render enlarged initials without importing this file.
 
 export default function Avatar({
   src,
@@ -58,13 +42,16 @@ export default function Avatar({
   showBadge = false,
   badgeColor = 'bg-green-500',
   loading = false,
+  viewable = false,
+  editable = false,
 }: AvatarProps) {
   const [hasError, setHasError] = useState(false);
+  const [isViewerOpen, setIsViewerOpen] = useState(false);
   const sizeClass = SIZE_MAP[size] || SIZE_MAP.md;
   const initials = getInitials(name);
   const colorClass = getColorForName(name);
 
-  const isInvalidSrc = !src || src === '/avatars/default.png' || src.trim() === '';
+  const isInvalidSrc = isPlaceholderAvatar(src);
 
   if (loading) {
     return (
@@ -74,27 +61,50 @@ export default function Avatar({
     );
   }
 
+  const visual =
+    isInvalidSrc || hasError ? (
+      <div
+        className={`${sizeClass} rounded-full flex items-center justify-center font-bold tracking-wider ${colorClass} shadow-inner`}
+        title={name}
+      >
+        {initials}
+      </div>
+    ) : (
+      <img
+        src={src ?? undefined}
+        alt={name}
+        onError={() => setHasError(true)}
+        className={`${sizeClass} rounded-full object-cover ring-1 ring-black/5 bg-gray-100`}
+      />
+    );
+
   return (
     <div className={`relative inline-flex flex-shrink-0 select-none ${className}`}>
-      {isInvalidSrc || hasError ? (
-        <div
-          className={`${sizeClass} rounded-full flex items-center justify-center font-bold tracking-wider ${colorClass} shadow-inner`}
-          title={name}
+      {viewable ? (
+        <button
+          type="button"
+          onClick={() => setIsViewerOpen(true)}
+          aria-label={editable ? 'View or change your photo' : `View ${name}'s photo`}
+          className="inline-flex rounded-full cursor-pointer transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue focus-visible:ring-offset-1"
         >
-          {initials}
-        </div>
+          {visual}
+        </button>
       ) : (
-        <img
-          src={src}
-          alt={name}
-          onError={() => setHasError(true)}
-          className={`${sizeClass} rounded-full object-cover ring-1 ring-black/5 bg-gray-100`}
-        />
+        visual
       )}
 
       {showBadge && (
         <span
           className={`absolute bottom-0 right-0 block w-2.5 h-2.5 rounded-full ring-2 ring-white ${badgeColor}`}
+        />
+      )}
+
+      {isViewerOpen && (
+        <AvatarViewerModal
+          src={src}
+          name={name}
+          editable={editable}
+          onClose={() => setIsViewerOpen(false)}
         />
       )}
     </div>

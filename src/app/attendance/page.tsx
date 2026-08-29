@@ -202,7 +202,7 @@ function AttendanceContent() {
                           className="flex items-center justify-between py-3 text-xs font-semibold"
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <Avatar src={p.avatar} name={p.name} size="sm" className="shrink-0" />
+                            <Avatar src={p.avatar} name={p.name} size="sm" className="shrink-0" viewable />
                             <div className="min-w-0">
                               <p className="font-extrabold text-gray-900 leading-tight truncate">{p.name}</p>
                               <span className="text-[9.5px] text-gray-400 block mt-0.5">{p.programCohort}</span>
@@ -265,6 +265,8 @@ function AttendanceContent() {
                         size="xl"
                         className="border-2 border-brand-blue shrink-0"
                         loading={isUserLoading}
+                        viewable
+                        editable={!isUserLoading}
                       />
                       <div>
                         <h3 className="font-extrabold text-base leading-snug">
@@ -547,7 +549,7 @@ function AttendanceContent() {
                                   className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-full"
                                   title={user.name}
                                 >
-                                  <Avatar src={user.avatar} name={user.name} size="xs" />
+                                  <Avatar src={user.avatar} name={user.name} size="xs" viewable />
                                   <span className="text-[9.5px] font-bold text-gray-700">{user.name.split(' ')[0]}</span>
                                 </div>
                               );

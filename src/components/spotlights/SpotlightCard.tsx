@@ -11,7 +11,7 @@ export function SpotlightCard({ spotlight }: { spotlight: Spotlight }) {
         {/* Avatar with Badge */}
         <div className="relative shrink-0 flex flex-col items-center">
           <div className="w-20 h-20 rounded-full border-4 border-yellow-400 p-0.5 shadow-lg overflow-hidden bg-white shrink-0">
-            <Avatar src={spotlight.userAvatar} name={spotlight.userName} size="xl" />
+            <Avatar src={spotlight.userAvatar} name={spotlight.userName} size="xl" viewable />
           </div>
           <span className="absolute bottom-[-6px] bg-yellow-400 text-gray-900 text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border border-white shadow-sm whitespace-nowrap">
             {spotlight.badgeLabel || 'SPOTLIGHT'}
@@ -61,7 +61,7 @@ export function SpotlightCard({ spotlight }: { spotlight: Spotlight }) {
       {/* Avatar with Badge */}
       <div className="relative shrink-0 flex flex-col items-center">
         <div className="w-20 h-20 rounded-full border-4 border-brand-blue/30 p-0.5 shadow-md overflow-hidden bg-white shrink-0">
-          <Avatar src={spotlight.userAvatar} name={spotlight.userName} size="xl" />
+          <Avatar src={spotlight.userAvatar} name={spotlight.userName} size="xl" viewable />
         </div>
         <span className="absolute bottom-[-6px] bg-brand-blue text-white text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border border-white shadow-sm whitespace-nowrap">
           {spotlight.badgeLabel || 'HONOR'}

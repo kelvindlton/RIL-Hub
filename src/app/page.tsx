@@ -276,6 +276,8 @@ function DashboardContent() {
                     size="md"
                     className="shrink-0"
                     loading={isUserLoading}
+                    viewable
+                    editable={!isUserLoading}
                   />
                   <div className="flex-1 space-y-2">
                     <textarea
@@ -458,21 +460,16 @@ function DashboardContent() {
                         {/* Feed Header */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0">
-                            {/* Redundant with the name link below, so hidden from AT
-                                and skipped in the tab order — mouse users get both. */}
-                            <Link
-                              href={`/profile/${post.authorId}`}
+                            {/* The photo opens the photo; the name link below goes
+                                to the profile. Two affordances, no duplication —
+                                which is also why this is no longer aria-hidden. */}
+                            <Avatar
+                              src={post.authorAvatar}
+                              name={post.authorName}
+                              size="md"
                               className="shrink-0"
-                              aria-hidden="true"
-                              tabIndex={-1}
-                            >
-                              <Avatar
-                                src={post.authorAvatar}
-                                name={post.authorName}
-                                size="md"
-                                className="shrink-0"
-                              />
-                            </Link>
+                              viewable
+                            />
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <Link
@@ -683,6 +680,7 @@ function DashboardContent() {
                                     name={c.authorName}
                                     size="xs"
                                     className="shrink-0 mt-0.5"
+                                    viewable
                                   />
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center justify-between">
@@ -712,6 +710,8 @@ function DashboardContent() {
                                 size="xs"
                                 className="shrink-0 mt-1"
                                 loading={isUserLoading}
+                                viewable
+                                editable={!isUserLoading}
                               />
                               <div className="flex-1 flex gap-2">
                                 <input

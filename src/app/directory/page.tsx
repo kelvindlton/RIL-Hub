@@ -272,7 +272,7 @@ function DirectoryContent() {
                       {members.map(m => (
                         <div key={m.id} className="flex items-center justify-between text-xs py-1">
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <Avatar src={m.avatar} name={m.name} size="xs" className="shrink-0" />
+                            <Avatar src={m.avatar} name={m.name} size="xs" className="shrink-0" viewable />
                             <div className="min-w-0">
                               <p className="font-bold text-gray-800 leading-tight truncate">{m.name}</p>
                               <span className="text-[9px] text-gray-400 font-semibold truncate block">{m.programCohort}</span>
