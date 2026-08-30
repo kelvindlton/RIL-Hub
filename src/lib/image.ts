@@ -1,9 +1,10 @@
 // Browser-only image helpers (createImageBitmap + <canvas>). Import from
 // 'use client' components only — there is no server equivalent of either API.
 
-// 512px is deliberate headroom: the largest avatar the app renders is the 2xl
+// DEFAULTS, tuned for avatars: the largest avatar the app renders is the 2xl
 // profile hero at 96px CSS, so 512 covers a 4x-DPR screen and any future use
-// without storing phone-camera-sized files.
+// without storing phone-camera-sized files. Callers with different geometry
+// override them per call — see FEED_IMAGE_OPTIONS.
 const MAX_DIMENSION = 512;
 
 // WebP at 0.85 puts a typical portrait around 20-60KB, far under the bucket's
@@ -11,6 +12,15 @@ const MAX_DIMENSION = 512;
 // the canvas white first, or a transparent PNG gains a black background.
 const OUTPUT_TYPE = 'image/webp';
 const OUTPUT_QUALITY = 0.85;
+
+export type DownscaleOptions = { maxDimension?: number; quality?: number };
+
+// Feed attachments. The shell is max-w-7xl (1280px) minus both sidebars, so the
+// feed column renders near 640px and the image box is capped max-h-80 with
+// object-cover — 1280 is a clean 2x for retina and nothing beyond that is
+// displayable. 0.82 rather than 0.85 because compression artefacts are far less
+// visible at 1280px than at avatar size, and it trims roughly 15% of the bytes.
+export const FEED_IMAGE_OPTIONS: DownscaleOptions = { maxDimension: 1280, quality: 0.82 };
 
 // The crop is an INTERMEDIATE — downscaleImage re-encodes it at 512px/0.85 — so
 // this is deliberately near-lossless. Any generation loss here would compound
@@ -27,7 +37,8 @@ export const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
 // Checked on the RAW file, before decoding, so a 50MB image never gets expanded
 // into memory. The downscaled result is ~20-60KB, so this rejects no legitimate
-// photo; the bucket's 2MB file_size_limit is the server-side backstop.
+// photo for an avatar, nor a ~120-350KB feed image; each bucket's own
+// file_size_limit (2 MiB avatars, 5 MiB post-images) is the server-side backstop.
 export const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
 
 /** Returns a member-facing message, or null when the file is acceptable. */
@@ -46,9 +57,10 @@ export function validateImageFile(file: File): string | null {
 export type CropRect = { x: number; y: number; width: number; height: number };
 
 /**
- * Shrinks `source` to fit within MAX_DIMENSION (aspect ratio preserved, no crop —
- * Avatar applies `object-cover rounded-full`, so the CSS centre-crops) and
- * re-encodes it as WebP.
+ * Shrinks `source` to fit within `options.maxDimension` (aspect ratio preserved,
+ * no crop — both call sites apply `object-cover` in CSS, so the browser
+ * centre-crops) and re-encodes it as WebP. Options default to the avatar values,
+ * which is why the avatar call sites pass nothing.
  *
  * Takes a Blob rather than a File so cropImage()'s output feeds straight in.
  *
@@ -57,7 +69,10 @@ export type CropRect = { x: number; y: number; width: number; height: number };
  * whereas createImageBitmap throws on anything that isn't a decodable image — so
  * a renamed executable never reaches the network.
  */
-export async function downscaleImage(source: Blob): Promise<Blob> {
+export async function downscaleImage(source: Blob, options: DownscaleOptions = {}): Promise<Blob> {
+  const maxDimension = options.maxDimension ?? MAX_DIMENSION;
+  const quality = options.quality ?? OUTPUT_QUALITY;
+
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(source);
@@ -67,7 +82,7 @@ export async function downscaleImage(source: Blob): Promise<Blob> {
 
   try {
     // Capped at 1: never upscale a small image, that only adds bytes.
-    const scale = Math.min(1, MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
     const width = Math.max(1, Math.round(bitmap.width * scale));
     const height = Math.max(1, Math.round(bitmap.height * scale));
 
@@ -80,7 +95,7 @@ export async function downscaleImage(source: Blob): Promise<Blob> {
     ctx.drawImage(bitmap, 0, 0, width, height);
 
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, OUTPUT_TYPE, OUTPUT_QUALITY)
+      canvas.toBlob(resolve, OUTPUT_TYPE, quality)
     );
 
     // toBlob yields null when the browser can't encode the requested type

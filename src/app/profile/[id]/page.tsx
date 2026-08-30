@@ -11,6 +11,7 @@ import Avatar from '@/components/common/Avatar';
 import EmptyState from '@/components/common/EmptyState';
 import ErrorState from '@/components/common/ErrorState';
 import { ProfileSkeleton } from '@/components/common/Skeletons';
+import PostImageViewerModal from '@/components/common/PostImageViewerModal';
 import EditProfileModal from '@/components/profile/EditProfileModal';
 import {
   ArrowLeft,
@@ -141,6 +142,11 @@ function ProfileContent({ id }: { id: string }) {
   const searchParams = useSearchParams();
   const celebrate = searchParams.get('celebrate') === 'true';
   const [isEditOpen, setIsEditOpen] = useState(false);
+  // Post attachments, same pattern as the community feed: failedImages so a
+  // broken image takes its clickable wrapper with it rather than leaving a dead
+  // clickable gap, viewerImage = the src currently open in the lightbox.
+  const [failedImages, setFailedImages] = useState<{ [postId: string]: boolean }>({});
+  const [viewerImage, setViewerImage] = useState<string | null>(null);
 
   useConfetti(celebrate);
 
@@ -472,28 +478,51 @@ function ProfileContent({ id }: { id: string }) {
                   description={`${profile.name} hasn't published any community feed posts yet.`}
                 />
               ) : (
-                userPosts.map((post) => (
-                  <div key={post.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar src={post.authorAvatar} name={post.authorName} size="sm" viewable />
-                      <div>
-                        <span className="text-xs font-bold text-gray-900">{post.authorName}</span>
-                        <span className="text-[10px] text-gray-400 block">{post.timestamp}</span>
+                userPosts.map((post) => {
+                  // null once a load fails, so the clickable wrapper disappears
+                  // with the image instead of lingering as an invisible target.
+                  const postImage = post.image && !failedImages[post.id] ? post.image : null;
+
+                  return (
+                    <div key={post.id} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm space-y-3">
+                      <div className="flex items-center gap-3">
+                        <Avatar src={post.authorAvatar} name={post.authorName} size="sm" viewable />
+                        <div>
+                          <span className="text-xs font-bold text-gray-900">{post.authorName}</span>
+                          <span className="text-[10px] text-gray-400 block">{post.timestamp}</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-700 font-medium whitespace-pre-wrap break-words">{post.content}</p>
+
+                      {postImage && (
+                        <button
+                          type="button"
+                          onClick={() => setViewerImage(postImage)}
+                          className="block w-full rounded-xl overflow-hidden border border-gray-200 max-h-80 bg-gray-50 cursor-zoom-in"
+                          aria-label="View image full size"
+                        >
+                          <img
+                            src={postImage}
+                            alt="Post attachment"
+                            className="w-full h-full object-cover"
+                            onError={() => setFailedImages(prev => ({ ...prev, [post.id]: true }))}
+                          />
+                        </button>
+                      )}
+
+                      <div className="flex items-center gap-4 text-xs text-gray-400 pt-2 border-t border-gray-100">
+                        <button onClick={() => likePost(post.id)} className="flex items-center gap-1 hover:text-red-500 font-bold">
+                          <Heart className="w-3.5 h-3.5" />
+                          <span>{post.likes}</span>
+                        </button>
+                        <span className="flex items-center gap-1 font-bold">
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>{post.comments.length}</span>
+                        </span>
                       </div>
                     </div>
-                    <p className="text-xs text-gray-700 font-medium whitespace-pre-wrap break-words">{post.content}</p>
-                    <div className="flex items-center gap-4 text-xs text-gray-400 pt-2 border-t border-gray-100">
-                      <button onClick={() => likePost(post.id)} className="flex items-center gap-1 hover:text-red-500 font-bold">
-                        <Heart className="w-3.5 h-3.5" />
-                        <span>{post.likes}</span>
-                      </button>
-                      <span className="flex items-center gap-1 font-bold">
-                        <MessageSquare className="w-3.5 h-3.5" />
-                        <span>{post.comments.length}</span>
-                      </span>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
@@ -606,6 +635,11 @@ function ProfileContent({ id }: { id: string }) {
           onSubmit={updateOwnProfile}
           onUploadAvatar={uploadOwnAvatar}
         />
+      )}
+
+      {/* View-only lightbox for post attachments — shared with the community feed */}
+      {viewerImage && (
+        <PostImageViewerModal src={viewerImage} onClose={() => setViewerImage(null)} />
       )}
     </DashboardLayout>
   );

@@ -613,11 +613,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                     </div>
 
                     <div className="flex items-center gap-2.5 mb-3">
-                      {isUserLoading ? (
-                        <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" aria-hidden="true" />
-                      ) : (
-                        <img src={currentUser.avatar} alt={currentUser.name} className="w-8 h-8 rounded-full border-2 border-brand-green/30" />
-                      )}
+                      {/* Ring rather than the old border-2: Avatar hardcodes its
+                          own img ring, and className lands on the wrapper. */}
+                      <Avatar
+                        src={currentUser.avatar}
+                        name={currentUser.name}
+                        size="sm"
+                        className="rounded-full ring-2 ring-brand-green/30"
+                        loading={isUserLoading}
+                        viewable
+                        editable={!isUserLoading}
+                      />
                       <div>
                         <p className="text-[11px] font-extrabold text-gray-900 leading-tight">
                           {isUserLoading ? <span className="inline-block w-20 h-3 bg-gray-200 animate-pulse rounded" aria-hidden="true" /> : currentUser.name}

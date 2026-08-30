@@ -17,6 +17,7 @@ import * as eventsData from '@/data/events';
 import * as welfareData from '@/data/welfare';
 import * as profilesData from '@/data/profiles';
 import * as avatarsData from '@/data/avatars';
+import * as postImagesData from '@/data/postImages';
 import * as attendanceData from '@/data/attendance';
 import * as spotlightsData from '@/data/spotlights';
 import type { Spotlight } from '@/data/spotlights';
@@ -64,6 +65,7 @@ interface AppContextType {
   refetchData: () => Promise<void>;
   setCurrentUser: (user: UserProfile) => void;
   addPost: (content: string, tags: string[], image?: string) => Promise<void>;
+  uploadPostImage: (image: Blob) => Promise<string>;
   likePost: (postId: string) => Promise<void>;
   bookmarkPost: (postId: string) => Promise<void>;
   addComment: (postId: string, content: string) => Promise<void>;
@@ -136,6 +138,19 @@ const simulatedReplies: Record<string, { senderName: string; senderAvatar: strin
 
 export { simulatedReplies };
 
+// Supabase realtime payloads arrive as untyped JSON. This names the columns
+// effect 3 actually reads instead of reaching for `any` — but it is still a
+// boundary CAST, not validation: nothing checks that `type` really is one of
+// AppNotification's five values before it lands in state.
+type NotificationRow = {
+  user_id: string;
+  type: AppNotification['type'];
+  title: string;
+  body: string;
+  avatar?: string;
+  link?: string;
+};
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUserState] = useState<UserProfile>(initialProfiles[0]);
   // The resolved *authenticated* user id — a real Supabase UUID once auth resolves,
@@ -198,10 +213,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (loadedSpotlights.status === 'fulfilled') {
         setSpotlights(loadedSpotlights.value);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn('Using local fallback state until Supabase connection is established:', err);
       setIsError(true);
-      setErrorMessage(err?.message || 'Failed to sync with live data');
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to sync with live data');
     } finally {
       setIsLoading(false);
     }
@@ -360,7 +375,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (updatedPosts.length > 0) setPosts(updatedPosts);
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
-          const n = payload.new as any;
+          const n = payload.new as NotificationRow;
           if (n.user_id === currentUser.id) {
             pushNotification({
               type: n.type,
@@ -410,35 +425,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const addPost = async (content: string, tags: string[], image?: string) => {
-    try {
-      await postsData.createPost(content, tags, image);
-      const updated = await postsData.fetchPosts();
-      setPosts(updated);
-      rewardUser(currentUser.id, 10);
-    } catch {
-      // Fallback local optimistic post
-      const newPost: Post = {
-        id: `post-${Date.now()}`,
-        authorId: currentUser.id,
-        authorName: currentUser.name,
-        authorAvatar: currentUser.avatar,
-        authorRole: currentUser.role,
-        content,
-        image,
-        likes: 0,
-        likedBy: [],
-        bookmarks: 0,
-        bookmarkedBy: [],
-        comments: [],
-        shares: 0,
-        tags,
-        timestamp: 'Just now',
-        isPinned: false
-      };
-      setPosts(prev => [newPost, ...prev]);
-      rewardUser(currentUser.id, 10);
+  // Uploads a feed attachment for the SIGNED-IN member and returns its public
+  // URL, to be handed to addPost. Same authUserId guard as uploadOwnAvatar and
+  // for the same reason: the storage path IS the ownership claim, and
+  // currentUser.id is the seeded mock id until auth resolves.
+  //
+  // Separate from addPost on purpose. The composer needs to tell "the photo
+  // never uploaded, so nothing was posted" apart from "the photo is stored but
+  // the post failed"; one combined action could only report a single,
+  // ambiguous failure.
+  const uploadPostImage = async (image: Blob): Promise<string> => {
+    if (!authUserId) {
+      throw new Error('You must be signed in to attach a photo.');
     }
+    try {
+      return await postImagesData.uploadPostImage(authUserId, image);
+    } catch (err) {
+      console.error('Failed to upload post image:', err);
+      throw err;
+    }
+  };
+
+  // No optimistic fallback, deliberately. This used to catch a failed
+  // createPost and fabricate a local Post, which rendered a failed save as a
+  // success — the member saw their post, refreshed, and it was gone. Now that
+  // an image is uploaded BEFORE the insert, that phantom would also display a
+  // real, permanently orphaned storage object. Letting the error propagate is
+  // what makes the composer's existing composerError path tell the truth.
+  const addPost = async (content: string, tags: string[], image?: string) => {
+    await postsData.createPost(content, tags, image);
+    const updated = await postsData.fetchPosts();
+    setPosts(updated);
+    rewardUser(currentUser.id, 10);
   };
 
   const likePost = async (postId: string) => {
@@ -522,16 +540,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const deletePost = async (postId: string): Promise<{ success: boolean; message?: string }> => {
-    // Deliberately NOT optimistic. Unlike addPost/likePost (which keep a local
-    // fallback on error), a delete must await the DB and only drop the post from
-    // state on a confirmed success — a failed or RLS-blocked delete has to leave
-    // the post visible and surface a real error, never silently disappear it.
+    // Deliberately NOT optimistic. Unlike likePost (which keeps a local fallback
+    // on error), a delete must await the DB and only drop the post from state on
+    // a confirmed success — a failed or RLS-blocked delete has to leave the post
+    // visible and surface a real error, never silently disappear it.
     try {
       await postsData.deletePost(postId);
       setPosts(prev => prev.filter(p => p.id !== postId));
       return { success: true };
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Failed to delete post.' };
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed to delete post.' };
     }
   };
 
@@ -905,6 +923,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         refetchData: loadLiveData,
         setCurrentUser: setCurrentUserState,
         addPost,
+        uploadPostImage,
         likePost,
         bookmarkPost,
         addComment,

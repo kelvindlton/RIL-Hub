@@ -1,4 +1,5 @@
 import { createClient } from '@/utils/supabase/client';
+import { deletePostImage } from '@/data/postImages';
 import { Post, Comment } from '@/lib/mockDb';
 
 export async function fetchPosts(): Promise<Post[]> {
@@ -160,16 +161,29 @@ export async function deletePost(postId: string) {
   // Chain .select() so we can tell a real deletion apart from an RLS-filtered
   // no-op: supabase-js returns { data: [], error: null } when a DELETE matches
   // zero rows because RLS hid them — it does NOT throw. So treat "0 rows
-  // returned" as a failure rather than a silent success.
+  // returned" as a failure rather than a silent success. image_url comes back
+  // in the same round trip because the row is gone after this — it is the only
+  // chance to learn which storage object to clean up.
   const { data, error } = await supabase
     .from('posts')
     .delete()
     .eq('id', postId)
-    .select('id');
+    .select('id, image_url');
 
   if (error) throw new Error(error.message);
   if (!data || data.length === 0) {
     throw new Error("Post couldn't be deleted — you may not have permission, or it no longer exists.");
+  }
+
+  // Row FIRST, object second — deliberately the same order as removeOwnAvatar,
+  // for the same reason: the inverse risks a post that survives with a broken
+  // image. An object nobody references is harmless, so this failure is logged
+  // and swallowed — the post IS gone as far as the app is concerned. No-ops for
+  // legacy base64 values, which have nothing in storage.
+  try {
+    await deletePostImage(data[0].image_url);
+  } catch (err) {
+    console.error('Post deleted, but its stored image could not be removed:', err);
   }
 
   return data[0];

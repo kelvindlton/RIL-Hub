@@ -9,8 +9,10 @@ import Avatar from '@/components/common/Avatar';
 import EmptyState from '@/components/common/EmptyState';
 import ErrorState from '@/components/common/ErrorState';
 import { PostSkeleton, TrendingWidgetSkeleton, CelebrationsWidgetSkeleton, HubEngagementSkeleton, SpotlightSkeleton } from '@/components/common/Skeletons';
+import PostImageViewerModal from '@/components/common/PostImageViewerModal';
 import SpotlightCard from '@/components/spotlights/SpotlightCard';
 import CreateSpotlightModal from '@/components/spotlights/CreateSpotlightModal';
+import { ACCEPTED_IMAGE_TYPES, downscaleImage, FEED_IMAGE_OPTIONS, validateImageFile } from '@/lib/image';
 import {
   Heart,
   MessageSquare,
@@ -44,6 +46,7 @@ function DashboardContent() {
     errorMessage,
     refetchData,
     addPost,
+    uploadPostImage,
     likePost,
     bookmarkPost,
     addComment,
@@ -91,7 +94,11 @@ function DashboardContent() {
 
   const [newPostContent, setNewPostContent] = useState('');
   const [newPostTags, setNewPostTags] = useState('');
-  const [newPostImage, setNewPostImage] = useState<string | null>(null);
+  // The File is what gets uploaded; the object URL is only for the local
+  // preview. Both are created and revoked in handlers, never in an effect —
+  // react-hooks/set-state-in-effect is an error in this project.
+  const [newPostFile, setNewPostFile] = useState<File | null>(null);
+  const [newPostPreview, setNewPostPreview] = useState<string | null>(null);
   const [showEmoji, setShowEmoji] = useState(false);
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<string | null>(null);
   const [commentInputs, setCommentInputs] = useState<{ [postId: string]: string }>({});
@@ -104,6 +111,12 @@ function DashboardContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDeletePostId, setConfirmDeletePostId] = useState<string | null>(null);
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
+  // Feed attachments. failedImages replaces an onError that set style.display
+  // directly: with the <img> now inside a <button>, hiding only the img would
+  // leave an invisible-but-clickable target that opens a lightbox on nothing.
+  // Same shape as expandedPosts. viewerImage holds the open image's src.
+  const [failedImages, setFailedImages] = useState<{ [postId: string]: boolean }>({});
+  const [viewerImage, setViewerImage] = useState<string | null>(null);
 
   // ─── Hub Engagement (trailing 7 days, bucketed by real weekday) ─────────────
   // hubEngagement is provided by AppContext (SECURITY DEFINER RPC, aggregate
@@ -204,6 +217,14 @@ function DashboardContent() {
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Retry cache, mirroring EditProfileModal's uploadedAvatarUrl: if the upload
+  // succeeds but createPost fails, pressing Post again must NOT upload a second
+  // copy of the same photo. Keyed on the File itself rather than holding a bare
+  // URL, so swapping the attachment after a failure correctly re-uploads instead
+  // of reusing the previous photo's URL. A ref, not state — nothing renders from
+  // it, and it must survive a re-render without triggering one.
+  const uploadedPostImageRef = React.useRef<{ file: File; url: string } | null>(null);
+
   const showToast = (msg: string, kind: 'success' | 'error' = 'success') => {
     setToast({ message: msg, kind });
     window.setTimeout(() => setToast(null), 2200);
@@ -217,20 +238,41 @@ function DashboardContent() {
 
   const EMOJIS = ['🚀', '🎉', '🔥', '💡', '🤖', '🌱', '💙', '👏', '✅', '🛠️'];
 
+  const clearPostImage = () => {
+    setNewPostPreview(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setNewPostFile(null);
+    uploadedPostImageRef.current = null;
+  };
+
+  // An object URL, not a data URL: the bytes go to Storage on submit, so the
+  // composer only needs something renderable locally. The type/size check that
+  // FileReader never did now runs here, through the same validateImageFile the
+  // avatar pickers use — `accept` on a file input is only a hint.
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setNewPostImage(reader.result as string);
-    reader.readAsDataURL(file);
     e.target.value = '';
+    if (!file) return;
+
+    const problem = validateImageFile(file);
+    if (problem) {
+      setComposerError(problem);
+      return;
+    }
+
+    setComposerError(null);
+    clearPostImage();
+    setNewPostFile(file);
+    setNewPostPreview(URL.createObjectURL(file));
   };
 
   const handlePostSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setComposerError(null);
 
-    if (!newPostContent.trim() && !newPostImage) {
+    if (!newPostContent.trim() && !newPostFile) {
       setComposerError('Please enter some text or attach an image to share a post.');
       return;
     }
@@ -242,10 +284,25 @@ function DashboardContent() {
         .map(t => t.trim().replace(/^#/, ''))
         .filter(Boolean);
 
-      await addPost(newPostContent, tagsArray, newPostImage || undefined);
+      // Downscale, upload, THEN insert. addPost stores only the returned URL, so
+      // a post row can never reference a file that failed to upload.
+      let imageUrl: string | undefined;
+      if (newPostFile) {
+        const cached = uploadedPostImageRef.current;
+        if (cached && cached.file === newPostFile) {
+          // A previous attempt already stored this exact File; re-uploading would
+          // orphan that object and cost the member a second upload.
+          imageUrl = cached.url;
+        } else {
+          imageUrl = await uploadPostImage(await downscaleImage(newPostFile, FEED_IMAGE_OPTIONS));
+          uploadedPostImageRef.current = { file: newPostFile, url: imageUrl };
+        }
+      }
+
+      await addPost(newPostContent, tagsArray, imageUrl);
       setNewPostContent('');
       setNewPostTags('');
-      setNewPostImage(null);
+      clearPostImage();
       showToast('Post shared with the community!');
     } catch (err: any) {
       setComposerError(err?.message || 'Failed to publish post. Please try again.');
@@ -300,16 +357,23 @@ function DashboardContent() {
                     )}
 
                     {/* Attached Image Preview */}
-                    {newPostImage && (
+                    {newPostPreview && (
                       <div className="relative rounded-xl overflow-hidden border border-gray-200 max-h-56 bg-gray-50">
                         <img
-                          src={newPostImage}
+                          src={newPostPreview}
                           alt="Upload preview"
                           className="w-full h-full object-cover"
+                          onError={() => {
+                            // An undecodable file would fail at downscaleImage
+                            // anyway, so drop the attachment rather than leave a
+                            // blank frame above an enabled Post button.
+                            clearPostImage();
+                            setComposerError('That image could not be read. Please choose a different file.');
+                          }}
                         />
                         <button
                           type="button"
-                          onClick={() => setNewPostImage(null)}
+                          onClick={clearPostImage}
                           className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full p-1 text-xs leading-none"
                         >
                           ✕
@@ -344,7 +408,7 @@ function DashboardContent() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/*"
+                      accept={ACCEPTED_IMAGE_TYPES.join(',')}
                       onChange={handleImageSelect}
                       className="hidden"
                     />
@@ -381,7 +445,7 @@ function DashboardContent() {
                   <button
                     type="button"
                     onClick={handlePostSubmit}
-                    disabled={isSubmitting || (!newPostContent.trim() && !newPostImage)}
+                    disabled={isSubmitting || (!newPostContent.trim() && !newPostFile)}
                     className="bg-brand-blue hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-bold px-5 py-2 rounded-xl transition-all shadow-sm shadow-brand-blue/20 active:scale-95 flex items-center gap-1.5"
                   >
                     {isSubmitting ? 'Posting...' : 'Post Update'}
@@ -437,6 +501,9 @@ function DashboardContent() {
                     const isCommentsOpen = activeCommentsPostId === post.id;
                     const isExpanded = !!expandedPosts[post.id];
                     const isLongContent = post.content.length > 320;
+                    // null once a load fails, so the clickable wrapper disappears
+                    // with the image instead of lingering as an invisible target.
+                    const postImage = post.image && !failedImages[post.id] ? post.image : null;
                     // UI gate only; RLS is the real authority. Matches is_admin()
                     // (author + admin/super_admin) — staff intentionally excluded.
                     const canDeletePost =
@@ -589,18 +656,20 @@ function DashboardContent() {
                             </button>
                           )}
                           
-                          {post.image && (
-                            <div className="rounded-xl overflow-hidden border border-gray-200 max-h-80 bg-gray-50">
+                          {postImage && (
+                            <button
+                              type="button"
+                              onClick={() => setViewerImage(postImage)}
+                              className="block w-full rounded-xl overflow-hidden border border-gray-200 max-h-80 bg-gray-50 cursor-zoom-in"
+                              aria-label="View image full size"
+                            >
                               <img
-                                src={post.image}
+                                src={postImage}
                                 alt="Post attachment"
                                 className="w-full h-full object-cover"
-                                onError={(e) => {
-                                  // Gracefully hide broken post images
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
+                                onError={() => setFailedImages(prev => ({ ...prev, [post.id]: true }))}
                               />
-                            </div>
+                            </button>
                           )}
 
                           {post.tags.length > 0 && (
@@ -1044,6 +1113,11 @@ function DashboardContent() {
             showToast('Member spotlight published successfully!');
           }}
         />
+      )}
+
+      {/* View-only lightbox for feed attachments */}
+      {viewerImage && (
+        <PostImageViewerModal src={viewerImage} onClose={() => setViewerImage(null)} />
       )}
     </DashboardLayout>
   );
