@@ -37,6 +37,10 @@ interface DashboardLayoutProps {
   children: React.ReactNode;
 }
 
+// Badge for nav items gated by requireAdmin(). Shared by the sidebar and drawer.
+const COMING_SOON_PILL =
+  'ml-auto shrink-0 text-[8px] uppercase font-bold tracking-wide text-gray-400 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full';
+
 // Sub-navigation configuration based on primary sidebar path
 function getSubTabs(pathname: string, role: string) {
   const isAdmin = role === 'admin' || role === 'super_admin' || role === 'staff';
@@ -132,6 +136,36 @@ function MobileContextualNav() {
   );
 }
 
+// Banner shown after requireAdmin() bounces a non-admin off a gated route.
+// useSearchParams needs a Suspense boundary, so this is a separate component,
+// matching how MobileContextualNav / ContextualNavbar are wired.
+function ComingSoonNotice() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  if (searchParams.get('notice') !== 'coming-soon') return null;
+
+  return (
+    <div className="bg-sky-blue/5 border-b border-sky-blue/20">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 py-2.5 flex items-center gap-2.5">
+        <Info className="w-4 h-4 text-sky-blue shrink-0" />
+        <p className="text-xs font-semibold text-gray-700 flex-1">
+          That section isn&apos;t available yet — we&apos;re still building it. You&apos;ll see it here as soon as it&apos;s ready.
+        </p>
+        <button
+          type="button"
+          onClick={() => router.replace(pathname)}
+          aria-label="Dismiss notice"
+          className="text-gray-400 hover:text-gray-600 transition-colors cursor-pointer shrink-0"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Client Component to handle contextual sub-tabs using query parameters safely
 function ContextualNavbar() {
   const pathname = usePathname();
@@ -178,6 +212,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [gridOpen, setGridOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
 
+  // Admin predicate for the "Coming Soon" gate. Matches public.is_admin() —
+  // super_admin + admin only, staff deliberately excluded. Guarded on isUserLoading
+  // because currentUser is seeded from initialProfiles[0], whose role is 'member';
+  // this therefore reads false until auth resolves and the items stay locked, which
+  // is the safe direction. The real gate is server-side in src/lib/requireAdmin.ts.
+  const isAdmin = !isUserLoading && ['super_admin', 'admin'].includes(currentUser.role);
+
   // --- Global search results (members, events, posts) ---
   const q = searchQuery.trim().toLowerCase();
   const memberResults = q
@@ -187,7 +228,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         p.skills.some(s => s.toLowerCase().includes(q))
       ).slice(0, 5)
     : [];
-  const eventResults = q
+  const eventResults = q && isAdmin
     ? events.filter(e =>
         e.title.toLowerCase().includes(q) ||
         e.location.toLowerCase().includes(q) ||
@@ -237,13 +278,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   };
 
   const navigation = [
-    { name: 'Feed', href: '/', icon: Home, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'] },
-    { name: 'Directory', href: '/directory', icon: Users, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'] },
-    { name: 'Events', href: '/events', icon: Calendar, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'] },
-    { name: 'My Attendance', href: '/attendance', icon: QrCode, roles: ['super_admin', 'admin', 'staff', 'member'] },
-    { name: 'Messages', href: '/messages', icon: MessageSquare, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'] },
-    { name: 'Welfare', href: '/welfare', icon: HeartHandshake, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'] },
-    { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['super_admin', 'admin'] }
+    { name: 'Feed', href: '/', icon: Home, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'], comingSoon: false },
+    { name: 'Directory', href: '/directory', icon: Users, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'], comingSoon: false },
+    { name: 'Events', href: '/events', icon: Calendar, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'], comingSoon: true },
+    { name: 'My Attendance', href: '/attendance', icon: QrCode, roles: ['super_admin', 'admin', 'staff', 'member'], comingSoon: true },
+    { name: 'Messages', href: '/messages', icon: MessageSquare, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'], comingSoon: true },
+    { name: 'Welfare', href: '/welfare', icon: HeartHandshake, roles: ['super_admin', 'admin', 'staff', 'member', 'alumni', 'partner'], comingSoon: true },
+    { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['super_admin', 'admin'], comingSoon: false }
   ];
 
   const visibleNav = navigation.filter(item => item.roles.includes(currentUser.role));
@@ -416,18 +457,33 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-2xl shadow-xl py-3 px-3 z-50">
                 <span className="text-[9px] uppercase font-bold tracking-widest text-gray-400 px-1">Quick Launcher</span>
                 <div className="grid grid-cols-3 gap-2 mt-2">
-                  {visibleNav.map((item) => (
-                    <button
-                      key={item.name}
-                      onClick={() => go(item.href)}
-                      className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl hover:bg-gray-50 transition-colors text-gray-600 hover:text-brand-blue"
-                    >
-                      <span className="w-9 h-9 rounded-xl bg-brand-blue/5 border border-brand-blue/10 flex items-center justify-center">
-                        <item.icon className="w-4 h-4 text-brand-blue" />
-                      </span>
-                      <span className="text-[9px] font-bold text-center leading-tight">{item.name}</span>
-                    </button>
-                  ))}
+                  {visibleNav.map((item) => {
+                    const locked = item.comingSoon && !isAdmin;
+                    return (
+                      <button
+                        key={item.name}
+                        type="button"
+                        onClick={() => go(item.href)}
+                        disabled={locked}
+                        title={locked ? `${item.name} — coming soon` : item.name}
+                        className={`flex flex-col items-center gap-1.5 p-2.5 rounded-xl ${locked
+                            ? 'text-gray-300 cursor-not-allowed'
+                            : 'hover:bg-gray-50 transition-colors text-gray-600 hover:text-brand-blue'
+                          }`}
+                      >
+                        <span className={`w-9 h-9 rounded-xl flex items-center justify-center ${locked
+                            ? 'bg-gray-100 border border-gray-200'
+                            : 'bg-brand-blue/5 border border-brand-blue/10'
+                          }`}>
+                          <item.icon className={`w-4 h-4 ${locked ? 'text-gray-300' : 'text-brand-blue'}`} />
+                        </span>
+                        <span className="text-[9px] font-bold text-center leading-tight">{item.name}</span>
+                        {locked && (
+                          <span className="text-[7.5px] uppercase font-bold tracking-wide text-gray-400 leading-none">Soon</span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -449,13 +505,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </div>
                 <div className="p-3 space-y-1 text-xs">
                   <p className="px-2 py-1.5 text-gray-600 font-medium leading-relaxed">
-                    Welcome to the RIL Hub demo. Explore the feed, directory, events, attendance, and welfare tools.
+                    Welcome to the RIL Hub. Browse the community feed and the member directory to get started.
                   </p>
                   <div className="bg-sky-blue/5 border border-sky-blue/15 rounded-lg p-2.5 text-[10.5px] text-gray-600 font-semibold leading-relaxed">
-                    💡 Tip: use the <span className="text-sky-blue font-bold">role switcher</span> (top-left of this bar) to preview Member, Staff, and Admin views.
+                    💡 Tip: use the <span className="text-sky-blue font-bold">search icon</span> in this bar to look up members and posts across the Hub.
                   </div>
-                  <button onClick={() => go('/welfare?tab=complaint')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-gray-50 font-semibold text-gray-700">Report an issue anonymously</button>
-                  <button onClick={() => go('/attendance?tab=tracker')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-gray-50 font-semibold text-gray-700">How daily check-in works</button>
+                  {isAdmin && (
+                    <>
+                      <button type="button" onClick={() => go('/welfare?tab=complaint')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-gray-50 font-semibold text-gray-700">Report an issue anonymously</button>
+                      <button type="button" onClick={() => go('/attendance?tab=tracker')} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-gray-50 font-semibold text-gray-700">How daily check-in works</button>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -505,13 +565,15 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 >
                   View My Passport
                 </Link>
-                <Link
-                  href="/welfare"
-                  onClick={() => setUserDropdownOpen(false)}
-                  className="block px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                  Welfare Center
-                </Link>
+                {isAdmin && (
+                  <Link
+                    href="/welfare"
+                    onClick={() => setUserDropdownOpen(false)}
+                    className="block px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    Welfare Center
+                  </Link>
+                )}
                 <div className="border-t border-gray-100 my-1"></div>
                 <button
                   onClick={() => {
@@ -534,6 +596,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <MobileContextualNav />
       </Suspense>
 
+      {/* --- COMING SOON NOTICE (bounced off a gated route) --- */}
+      <Suspense fallback={null}>
+        <ComingSoonNotice />
+      </Suspense>
+
       {/* --- MOBILE DRAWER --- */}
       {mobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-50 bg-black/40" onClick={() => setMobileMenuOpen(false)}>
@@ -550,6 +617,23 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
             <nav className="flex-1 py-4 space-y-1 overflow-y-auto">
               {visibleNav.map((item) => {
+                const locked = item.comingSoon && !isAdmin;
+
+                if (locked) {
+                  return (
+                    <div
+                      key={item.name}
+                      aria-disabled="true"
+                      title={`${item.name} — coming soon`}
+                      className="flex items-center px-4 py-2.5 text-xs font-bold rounded-xl gap-3 border border-transparent text-gray-300 cursor-not-allowed select-none"
+                    >
+                      <item.icon className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{item.name}</span>
+                      <span className={COMING_SOON_PILL}>Coming Soon</span>
+                    </div>
+                  );
+                }
+
                 const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
                 return (
                   <Link
@@ -685,6 +769,23 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           {/* ── Primary Navigation Card ── */}
           <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm space-y-1">
             {visibleNav.map((item) => {
+              const locked = item.comingSoon && !isAdmin;
+
+              if (locked) {
+                return (
+                  <div
+                    key={item.name}
+                    aria-disabled="true"
+                    title={`${item.name} — coming soon`}
+                    className="w-full flex items-center px-4 py-2.5 text-xs font-bold rounded-xl gap-3 border border-transparent text-gray-300 cursor-not-allowed select-none"
+                  >
+                    <item.icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{item.name}</span>
+                    <span className={COMING_SOON_PILL}>Coming Soon</span>
+                  </div>
+                );
+              }
+
               const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
               return (
                 <Link

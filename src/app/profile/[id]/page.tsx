@@ -155,6 +155,8 @@ function ProfileContent({ id }: { id: string }) {
   // (AppContext initialProfiles[0]) for first paint, so this would read false on a
   // fresh load of your OWN profile and flash the "Send DM" button.
   const isOwnProfile = !isUserLoading && currentUser.id === id;
+  // Messaging is admin-only until /messages ships — see src/lib/requireAdmin.ts.
+  const isAdmin = !isUserLoading && ['super_admin', 'admin'].includes(currentUser.role);
   const userPosts = posts.filter((p) => p.authorId === id);
 
   const getRoleBadgeColor = (role: string) => {
@@ -324,7 +326,7 @@ function ProfileContent({ id }: { id: string }) {
                       Edit Profile
                     </button>
                   </>
-                ) : (
+                ) : isAdmin ? (
                   <Link
                     href={`/messages?tab=dms&user=${profile.id}`}
                     className="flex items-center gap-1.5 bg-brand-blue text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-blue-600 transition-colors shadow-sm"
@@ -332,7 +334,7 @@ function ProfileContent({ id }: { id: string }) {
                     <Send className="w-3.5 h-3.5" />
                     Send DM
                   </Link>
-                )}
+                ) : null}
               </div>
             </div>
 
