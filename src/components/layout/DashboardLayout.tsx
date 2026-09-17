@@ -4,6 +4,7 @@ import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import { useApp } from '@/context/AppContext';
+import { auth } from '@/lib/auth';
 import DailyCheckInModal from '@/components/attendance/DailyCheckInModal';
 import Avatar from '@/components/common/Avatar';
 import {
@@ -30,7 +31,8 @@ import {
   ShieldAlert,
   Info,
   Flame,
-  MapPin
+  MapPin,
+  LogOut
 } from 'lucide-react';
 
 interface DashboardLayoutProps {
@@ -255,6 +257,34 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   // Roles eligible for the daily geo check-in button
   const canDailyCheckIn = ['member', 'alumni', 'staff'].includes(currentUser.role);
   const checkInStatus = getDailyCheckInStatus(currentUser.id);
+
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState(false);
+
+  // This used to be router.push('/login') alone, which navigated without touching
+  // the Supabase cookie — the session stayed valid, so the next person on a shared
+  // machine was still signed in. refresh() then forces the server components (and
+  // requireAdmin) to re-read the now-empty session.
+  //
+  // On failure we deliberately stay put: landing on /login while the cookie is
+  // still live would tell the member they had logged out when they hadn't.
+  const handleSignOut = async () => {
+    setSignOutError(false);
+    setIsSigningOut(true);
+    try {
+      const { error } = await auth.signOut();
+      if (error) throw error;
+    } catch (err) {
+      console.error('[DashboardLayout] sign out failed:', err);
+      setSignOutError(true);
+      setIsSigningOut(false);
+      return;
+    }
+    setUserDropdownOpen(false);
+    setMobileMenuOpen(false);
+    router.push('/login');
+    router.refresh();
+  };
 
   const getNotifIcon = (type: string) => {
     switch (type) {
@@ -575,14 +605,17 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   </Link>
                 )}
                 <div className="border-t border-gray-100 my-1"></div>
+                {signOutError && (
+                  <p className="px-4 py-2 text-[10px] font-semibold text-red-600 leading-snug">
+                    Couldn&apos;t sign you out. Check your connection and try again.
+                  </p>
+                )}
                 <button
-                  onClick={() => {
-                    setUserDropdownOpen(false);
-                    router.push('/login');
-                  }}
-                  className="w-full text-left block px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50"
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="w-full text-left block px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"
                 >
-                  Log Out
+                  {isSigningOut ? 'Signing out…' : 'Log Out'}
                 </button>
               </div>
             )}
@@ -651,6 +684,24 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 );
               })}
             </nav>
+
+            {/* The desktop dropdown is `hidden sm:block`, so before this the drawer
+                was the only account surface on a phone and it had no way out. */}
+            <div className="pt-4 border-t border-gray-100">
+              {signOutError && (
+                <p className="pb-2 text-[10px] font-semibold text-red-600 leading-snug">
+                  Couldn&apos;t sign you out. Check your connection and try again.
+                </p>
+              )}
+              <button
+                onClick={handleSignOut}
+                disabled={isSigningOut}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-bold text-red-600 rounded-xl hover:bg-red-50 disabled:opacity-50"
+              >
+                <LogOut className="w-4 h-4 shrink-0" />
+                <span>{isSigningOut ? 'Signing out…' : 'Log Out'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

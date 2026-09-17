@@ -1,10 +1,9 @@
 'use client';
 
 import React, { useState, Suspense } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { auth } from '@/lib/auth';
-import { Shield, Mail, Lock, User, ArrowRight, ArrowLeft, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
 function LoginForm() {
   const router = useRouter();
@@ -16,6 +15,7 @@ function LoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(authError);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -89,24 +89,13 @@ function LoginForm() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
-      
-      {/* Back button */}
-      <div className="absolute top-6 left-6">
-        <Link
-          href="/"
-          className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-brand-blue transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Dashboard
-        </Link>
-      </div>
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="w-12 h-12 rounded-lg bg-brand-blue flex items-center justify-center font-bold text-white text-xl mx-auto shadow-md">
           R
         </div>
         <h2 className="mt-6 text-center text-2xl font-extrabold text-brand-black">
-          Renaissance Family Portal
+          RIL Hub
         </h2>
         <p className="mt-1.5 text-center text-xs text-gray-500 font-medium">
           The unified digital home for Renaissance Innovation Labs.
@@ -197,7 +186,7 @@ function LoginForm() {
                   <Lock className="h-4 w-4 text-gray-400" />
                 </div>
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -207,32 +196,30 @@ function LoginForm() {
               </div>
             </div>
 
-            {mode === 'signin' && (
-              <div className="flex items-center justify-between text-xs font-semibold">
-                <div className="flex items-center">
-                  <input
-                    id="remember-me"
-                    name="remember-me"
-                    type="checkbox"
-                    defaultChecked
-                    className="h-4 w-4 text-brand-blue border-gray-300 rounded focus:ring-brand-blue"
-                  />
-                  <label htmlFor="remember-me" className="ml-2 block text-gray-500">
-                    Keep session active
-                  </label>
-                </div>
-
-                <div className="text-xs">
-                  <button
-                    type="button"
-                    onClick={handleForgotPassword}
-                    className="font-bold text-brand-blue hover:underline"
-                  >
-                    Forgot Password?
-                  </button>
-                </div>
+            <div className="flex items-center justify-between text-xs font-semibold">
+              <div className="flex items-center">
+                <input
+                  id="show-password"
+                  type="checkbox"
+                  checked={showPassword}
+                  onChange={(e) => setShowPassword(e.target.checked)}
+                  className="h-4 w-4 text-brand-blue border-gray-300 rounded focus:ring-brand-blue cursor-pointer"
+                />
+                <label htmlFor="show-password" className="ml-2 block text-gray-500 cursor-pointer select-none">
+                  Show password
+                </label>
               </div>
-            )}
+
+              {mode === 'signin' && (
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  className="font-bold text-brand-blue hover:underline"
+                >
+                  Forgot Password?
+                </button>
+              )}
+            </div>
 
             <button
               type="submit"
@@ -278,17 +265,6 @@ function LoginForm() {
               </svg>
               Google Workspace
             </button>
-          </div>
-
-          {/* Security badge */}
-          <div className="bg-sky-blue/5 border border-sky-blue/20 rounded-lg p-3 text-[10px] font-semibold text-sky-blue leading-relaxed flex gap-2">
-            <Shield className="w-4 h-4 text-sky-blue shrink-0 mt-0.5" />
-            <div>
-              <p className="font-extrabold uppercase tracking-wide leading-none">Enterprise SSO & RLS Active</p>
-              <p className="mt-1 text-gray-500 leading-normal">
-                Access is protected by Supabase Row Level Security and encrypted identity credentials.
-              </p>
-            </div>
           </div>
 
         </div>

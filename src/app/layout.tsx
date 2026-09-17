@@ -11,7 +11,7 @@ const openSans = Open_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "RIL Family - Community & Operational Hub",
+  title: "RIL Hub — Renaissance Innovation Labs",
   description: "The digital home and operational platform for Renaissance Innovation Labs (RIL) community members, staff, and alumni.",
   icons: {
     icon: "/favicon.ico",

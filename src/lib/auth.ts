@@ -84,12 +84,22 @@ export const auth = {
   },
 
   /**
-   * Send password reset email
+   * Send password reset email.
+   *
+   * The link has to land on /auth/callback, not /auth/reset-password directly: the
+   * recovery URL carries a PKCE `code` that must be exchanged for a session before
+   * updateUser({ password }) is authorised. The callback route already does that
+   * exchange and honours ?next=, so it hands an authenticated session to the form.
+   *
+   * The verifier for that code lives in this browser, so the email must be opened
+   * on the same device the reset was requested from — the callback bounces to
+   * /login?error=... otherwise.
    */
   async resetPasswordForEmail(email: string) {
     const supabase = createClient();
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
     return await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${typeof window !== 'undefined' ? window.location.origin : ''}/auth/reset-password`,
+      redirectTo: `${origin}/auth/callback?next=/auth/reset-password`,
     });
   },
 
