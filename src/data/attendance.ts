@@ -1,5 +1,4 @@
 import { createClient } from '@/utils/supabase/client';
-import { checkGeofence } from '@/lib/geofence';
 
 export interface DailyCheckInStatus {
   checkedInToday: boolean;
@@ -8,14 +7,35 @@ export interface DailyCheckInStatus {
   totalDays: number;
 }
 
+/**
+ * Machine-readable rejection codes from record_daily_checkin. The server always
+ * pairs one of these with a human `message`, so callers can pick tailored copy
+ * instead of falling back to a generic failure.
+ */
+export type CheckInRejectReason =
+  | 'already'       // already checked in today (idempotent no-op)
+  | 'no_position'   // no coordinates reached the server
+  | 'bad_position'  // coordinates outside valid lat/lng range
+  | 'no_hubs'       // hub_locations is empty
+  | 'inaccurate'    // GPS fix too fuzzy to place inside or outside
+  | 'outside';      // verified position is beyond the hub radius
+
 export interface RecordCheckInResult {
   success: boolean;
   message?: string;
+  reason?: CheckInRejectReason;
   streak?: number;
   totalDays?: number;
   points?: number;
   checkInTime?: string;
+  /** Server-computed metres from the resolved hub. */
+  distanceM?: number;
+  /** Name of the hub the server resolved as nearest. */
+  hubName?: string;
+  /** That hub's allowed radius, from the DB rather than a client constant. */
+  radiusM?: number;
 }
+
 
 export async function fetchDailyCheckInStatus(userId: string): Promise<DailyCheckInStatus> {
   const supabase = createClient();
@@ -49,21 +69,20 @@ export async function fetchDailyCheckInStatus(userId: string): Promise<DailyChec
 
 export async function recordDailyCheckIn(
   _userId: string,          // kept for call-site compatibility; the RPC uses auth.uid()
-  latitude?: number,
-  longitude?: number,
+  latitude: number,
+  longitude: number,
+  accuracyM?: number,
 ): Promise<RecordCheckInResult> {
   const supabase = createClient();
 
-  // Client geofence is still enforced in the modal; resolve the hub for logging.
-  let hubId = 'ril-main';
-  if (latitude !== undefined && longitude !== undefined) {
-    const geo = checkGeofence(latitude, longitude);
-    if (geo.within) hubId = geo.hub.id;
-  }
-
-  // Idempotency, streak, ledger (+50) and profile balance are all handled
-  // atomically inside the SECURITY DEFINER RPC. No direct table writes here.
-  const { data, error } = await supabase.rpc('record_daily_checkin', { p_hub_id: hubId });
+  // Coordinates go to the server as-is. The RPC resolves the nearest hub, runs
+  // the geofence and decides eligibility — the client no longer names its own
+  // hub, and no local geofence result is trusted or even consulted here.
+  const { data, error } = await supabase.rpc('record_daily_checkin', {
+    p_lat: latitude,
+    p_lng: longitude,
+    p_accuracy_m: accuracyM ?? null,
+  });
 
   if (error || !data) {
     return { success: false, message: error?.message ?? 'No response from server.' };
@@ -72,10 +91,14 @@ export async function recordDailyCheckIn(
   return {
     success: data.success,
     message: data.message,
+    reason: data.reason,
     streak: data.streak,
     totalDays: data.total_days,
     points: data.points,
     checkInTime: data.check_in_time,
+    distanceM: data.distance_m ?? undefined,
+    hubName: data.hub_name ?? undefined,
+    radiusM: data.radius_m ?? undefined,
   };
 }
 

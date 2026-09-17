@@ -1,7 +1,14 @@
 /**
  * geofence.ts
- * RIL Hub geolocation utilities — configurable hub coordinates and radius check.
- * Admin-configurable in production; update HUB_LOCATIONS to match physical site.
+ * RIL Hub geolocation utilities.
+ *
+ * NOT the source of truth. Check-in eligibility is decided server-side by the
+ * record_daily_checkin RPC against public.hub_locations — see
+ * supabase/migrations/20260901000000_checkin_server_geofence.sql. The values
+ * below are a client-side convenience copy (display defaults, dev simulation)
+ * and can drift from the DB; a client-side geofence result must never gate a
+ * check-in, since the caller controls this code and can decline to run it.
+ * To move or resize a hub, update the hub_locations row.
  */
 
 export interface HubLocation {

@@ -47,6 +47,20 @@ export interface DailyCheckInStatus {
   isLoading: boolean;
 }
 
+/**
+ * What a check-in attempt resolved to. On rejection the server supplies both a
+ * `reason` code and its own `message`, plus the hub figures behind the decision,
+ * so the UI can explain the specific failure rather than a generic one.
+ */
+export interface DailyCheckInOutcome {
+  success: boolean;
+  message?: string;
+  reason?: attendanceData.CheckInRejectReason;
+  hubName?: string;
+  distanceM?: number;
+  radiusM?: number;
+}
+
 interface AppContextType {
   currentUser: UserProfile;
   isUserLoading: boolean;
@@ -72,7 +86,7 @@ interface AppContextType {
   deletePost: (postId: string) => Promise<{ success: boolean; message?: string }>;
   toggleRsvp: (eventId: string) => Promise<void>;
   checkInUser: (eventId: string, userId: string, method: 'qr' | 'manual') => Promise<{ success: boolean; message: string }>;
-  recordDailyCheckIn: (userId: string, lat?: number, lon?: number) => Promise<{ success: boolean; message?: string }>;
+  recordDailyCheckIn: (userId: string, lat: number, lon: number, accuracyM?: number) => Promise<DailyCheckInOutcome>;
   getDailyCheckInStatus: (userId: string) => DailyCheckInStatus;
   hubEngagement: attendanceData.HubEngagementDay[] | null;
   refetchHubEngagement: () => Promise<void>;
@@ -608,17 +622,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const recordDailyCheckIn = async (
     userId: string,
-    lat?: number,
-    lon?: number,
-  ): Promise<{ success: boolean; message?: string }> => {
+    lat: number,
+    lon: number,
+    accuracyM?: number,
+  ): Promise<DailyCheckInOutcome> => {
     const today = new Date().toISOString().split('T')[0];
 
     // Server-authoritative write. No optimistic guessing: we apply exactly what
     // the RPC reports, and on failure we change nothing and surface the message.
-    const result = await attendanceData.recordDailyCheckIn(userId, lat, lon);
+    const result = await attendanceData.recordDailyCheckIn(userId, lat, lon, accuracyM);
 
     if (!result.success) {
-      return { success: false, message: result.message ?? 'Check-in failed. Please try again.' };
+      // Pass the rejection through intact — reason and hub figures included — so
+      // the caller can show why it failed instead of a generic error.
+      return {
+        success: false,
+        message: result.message ?? 'Check-in failed. Please try again.',
+        reason: result.reason,
+        hubName: result.hubName,
+        distanceM: result.distanceM,
+        radiusM: result.radiusM,
+      };
     }
 
     const record: DailyCheckInRecord = {
@@ -647,7 +671,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // it updates alongside the check-in card without a manual page refresh.
     void refetchHubEngagement();
 
-    return { success: true };
+    return { success: true, hubName: result.hubName, distanceM: result.distanceM };
   };
 
   const getDailyCheckInStatus = (userId: string): DailyCheckInStatus => {

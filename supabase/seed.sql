@@ -1,9 +1,12 @@
 -- SEED HUB LOCATIONS
+-- Only real RIL sites belong here: the server resolves the NEAREST hub when
+-- awarding a check-in, so a fictional row is a fictional place to be marked
+-- present at. The template's 'ril-dallas' row was removed for that reason
+-- (see migration 20260901000000_checkin_server_geofence.sql).
 INSERT INTO public.hub_locations (id, name, latitude, longitude, radius_m)
-VALUES 
-    ('ril-main', 'Renaissance Innovation Labs', 4.8495000, 6.9742780, 50),
-    ('ril-dallas', 'RIL Dallas Hub', 32.7767000, -96.7970000, 200)
-ON CONFLICT (id) DO UPDATE 
+VALUES
+    ('ril-main', 'Renaissance Innovation Labs', 4.8495000, 6.9742780, 50)
+ON CONFLICT (id) DO UPDATE
     SET name = EXCLUDED.name,
         latitude = EXCLUDED.latitude,
         longitude = EXCLUDED.longitude,

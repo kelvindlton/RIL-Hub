@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { checkGeofence, formatDistance } from '@/lib/geofence';
-import type { DailyCheckInStatus } from '@/context/AppContext';
+import { PRIMARY_HUB, formatDistance } from '@/lib/geofence';
+import type { DailyCheckInStatus, DailyCheckInOutcome } from '@/context/AppContext';
 import { MapPin, CheckCircle, Lock, AlertTriangle, Loader2, RotateCcw, X, Flame, Calendar, Zap } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -13,11 +13,34 @@ interface Props {
   open: boolean;
   onClose: () => void;
   currentUser: { id: string; name: string; avatar: string };
-  onCheckInSuccess: (userId: string) => Promise<{ success: boolean; message?: string }>;
+  onCheckInSuccess: (
+    userId: string, lat: number, lon: number, accuracyM?: number,
+  ) => Promise<DailyCheckInOutcome>;
   getDailyCheckInStatus: (userId: string) => DailyCheckInStatus;
   /** Dev-mode: simulate being at the hub without real GPS match */
   devSimulate?: boolean;
 }
+
+// The RPC names every rejection. Route each one to the panel that actually
+// explains it, so a specific server answer never degrades into "Something went
+// wrong". Anything unmapped still falls back to the error panel.
+const REASON_STATE: Record<string, ModalState> = {
+  outside: 'outside',       // verified position beyond the hub radius
+  no_position: 'denied',    // no coordinates reached the server → enable-location panel
+  inaccurate: 'error',      // fix too fuzzy to trust
+  bad_position: 'error',    // impossible coordinates
+  no_hubs: 'error',         // hub_locations is empty — an admin problem, not the member's
+  already: 'error',         // idempotent no-op, not a failure
+};
+
+// Replaces the error panel's generic heading when the server told us more.
+const REASON_TITLE: Record<string, string> = {
+  inaccurate: 'Location signal too weak',
+  bad_position: 'Invalid location reading',
+  no_hubs: 'No hub locations configured',
+  already: 'Already checked in today',
+};
+
 
 // ─── Confetti particle system ────────────────────────────────────────────────
 
@@ -143,15 +166,27 @@ function Spinner({ label }: { label: string }) {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
+// Dev Mode skips real GPS and claims the hub's exact coordinates, so it awards
+// a check-in from anywhere. Eligibility is now decided server-side from the
+// reported position — but the position itself is still client-supplied, which is
+// precisely the hole this toggle walks through. It stays out of production.
+// NODE_ENV is statically replaced at build time, so the block below is dropped
+// from production bundles rather than merely hidden.
+const DEV_MODE_AVAILABLE = process.env.NODE_ENV !== 'production';
+
 export default function DailyCheckInModal({
   open, onClose, currentUser, onCheckInSuccess, getDailyCheckInStatus, devSimulate = false
 }: Props) {
   const [state, setState] = useState<ModalState>('requesting');
   const [distanceM, setDistanceM] = useState<number | null>(null);
   const [hubName, setHubName] = useState('Renaissance Innovation Labs');
+  // Display default only. Replaced by the hub's real radius_m as soon as the
+  // server answers, so widening a radius in the DB shows up here without a ship.
+  const [radiusM, setRadiusM] = useState(PRIMARY_HUB.radius);
   const [countdown, setCountdown] = useState(4);
   const [devMode, setDevMode] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorTitle, setErrorTitle] = useState<string | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const status = getDailyCheckInStatus(currentUser.id);
@@ -160,24 +195,36 @@ export default function DailyCheckInModal({
 
   // ── Check-in submission ────────────────────────────────────────────────────
 
-  // Await the authoritative write, then show success or a real error.
-  const submitCheckIn = useCallback(async () => {
+  // The server decides eligibility. We send the reported position and render
+  // whatever it says — including which panel to show when it says no.
+  const submitCheckIn = useCallback(async (
+    lat: number, lng: number, accuracyM?: number,
+  ) => {
     setState('verifying');
     setErrorMsg(null);
+    setErrorTitle(null);
     try {
-      const res = await onCheckInSuccess(currentUser.id);
+      const res = await onCheckInSuccess(currentUser.id, lat, lng, accuracyM);
       if (res.success) {
         setState('success');
         setCountdown(4);
-      } else {
-        setErrorMsg(res.message ?? 'Check-in could not be saved.');
-        setState('error');
+        return;
       }
+
+      // Rejected. Adopt the server's own figures — they come from the DB, not
+      // from the hardcoded copy of the hub in src/lib/geofence.ts.
+      if (res.distanceM !== undefined) setDistanceM(res.distanceM);
+      if (res.hubName) setHubName(res.hubName);
+      if (res.radiusM !== undefined) setRadiusM(res.radiusM);
+      setErrorMsg(res.message ?? 'Check-in could not be saved.');
+      setErrorTitle(res.reason ? REASON_TITLE[res.reason] ?? null : null);
+      setState(res.reason ? REASON_STATE[res.reason] ?? 'error' : 'error');
     } catch {
       setErrorMsg('Network error — your check-in was not saved. Please try again.');
       setState('error');
     }
   }, [currentUser.id, onCheckInSuccess]);
+
 
   // ── Geolocation flow ─────────────────────────────────────────────────────
 
@@ -185,15 +232,21 @@ export default function DailyCheckInModal({
     setState('requesting');
     setDistanceM(null);
     setErrorMsg(null);
+    setErrorTitle(null);
 
     if (simulate) {
-      // Dev simulation — skip real GPS
+      // Dev simulation — claim the hub's exact coordinates. This IS the spoofing
+      // vector the server cannot detect: coordinates are client-supplied, so
+      // "I am standing at the hub" is unfalsifiable. Hence dev builds only.
       setState('verifying');
-      setTimeout(() => { void submitCheckIn(); }, 1400);
+      setTimeout(() => {
+        void submitCheckIn(PRIMARY_HUB.latitude, PRIMARY_HUB.longitude, 5);
+      }, 1400);
       return;
     }
 
     if (!navigator.geolocation) {
+      setErrorMsg('This browser does not support location services, so attendance cannot be verified.');
       setState('error');
       return;
     }
@@ -201,34 +254,37 @@ export default function DailyCheckInModal({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setState('verifying');
-        // Small artificial delay for UX realism
+        // No client-side gate here on purpose. src/lib/geofence.ts is a
+        // hardcoded copy of hub_locations, so pre-judging with it could veto a
+        // check-in the server would allow (e.g. after an admin widens a radius)
+        // and would discard the server's specific rejection reason. Send the
+        // position; let the RPC decide. Small delay is for UX realism.
         setTimeout(() => {
-          const result = checkGeofence(pos.coords.latitude, pos.coords.longitude);
-          setDistanceM(result.distanceM);
-          setHubName(result.hub.name);
-          if (result.within) {
-            void submitCheckIn();
-          } else {
-            setState('outside');
-          }
+          void submitCheckIn(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
         }, 1000);
       },
       (err) => {
         if (err.code === err.PERMISSION_DENIED) {
           setState('denied');
         } else {
+          setErrorMsg(
+            err.code === err.TIMEOUT
+              ? 'Getting a location fix timed out. Move somewhere with a clearer signal and retry.'
+              : 'Your location is unavailable right now, so attendance could not be verified.',
+          );
           setState('error');
         }
       },
       { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 }
     );
-  }, [currentUser.id, onCheckInSuccess, submitCheckIn]);
+  }, [submitCheckIn]);
+
 
   // Start flow when modal opens
   useEffect(() => {
     if (!open) return;
     setState('requesting');
-    runGeolocation(devMode || devSimulate);
+    runGeolocation(DEV_MODE_AVAILABLE && (devMode || devSimulate));
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-dismiss countdown on success
@@ -316,11 +372,19 @@ export default function DailyCheckInModal({
               Attendance can only be recorded when you are physically present at an approved hub location.
             </p>
           </div>
-          {distanceM !== null && (
+          {(distanceM !== null || errorMsg) && (
             <div className="w-full bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-left space-y-1">
               <p className="text-[10px] uppercase font-bold text-red-400 tracking-wider">Distance from hub</p>
-              <p className="text-sm font-extrabold text-red-600">{formatDistance(distanceM)} away from {hubName}</p>
-              <p className="text-[10.5px] text-gray-400 font-medium">You need to be within 150m to check in.</p>
+              {distanceM !== null ? (
+                <>
+                  {/* Both figures are the server's own — computed from the DB row,
+                      not from the client's hardcoded copy of the hub. */}
+                  <p className="text-sm font-extrabold text-red-600">{formatDistance(distanceM)} away from {hubName}</p>
+                  <p className="text-[10.5px] text-gray-400 font-medium">You need to be within {radiusM}m to check in.</p>
+                </>
+              ) : (
+                <p className="text-sm font-extrabold text-red-600">{errorMsg}</p>
+              )}
             </div>
           )}
           <button
@@ -343,7 +407,9 @@ export default function DailyCheckInModal({
           <div className="space-y-2">
             <h3 className="text-lg font-extrabold text-gray-900">Location access required</h3>
             <p className="text-xs text-gray-500 font-medium leading-relaxed max-w-xs">
-              Location access is required to verify your attendance at the hub. Please enable it and retry.
+              {/* Prefer the server's wording when the rejection came from the RPC
+                  (reason 'no_position'); otherwise this is a browser-level denial. */}
+              {errorMsg ?? 'Location access is required to verify your attendance at the hub. Please enable it and retry.'}
             </p>
           </div>
           <div className="w-full bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-left space-y-2">
@@ -365,14 +431,16 @@ export default function DailyCheckInModal({
       );
     }
 
-    // Generic error
+    // Error panel. Headed by the server's rejection reason when there is one, so
+    // a specific answer ('inaccurate', 'already', …) is never flattened into
+    // "Something went wrong".
     return (
       <div className="flex flex-col items-center gap-5 text-center animate-in fade-in duration-300">
         <div className="w-20 h-20 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center">
           <AlertTriangle className="w-9 h-9 text-gray-400" />
         </div>
         <div className="space-y-2">
-          <h3 className="text-lg font-extrabold text-gray-900">Something went wrong</h3>
+          <h3 className="text-lg font-extrabold text-gray-900">{errorTitle ?? 'Something went wrong'}</h3>
           <p className="text-xs text-gray-500 font-medium">{errorMsg ?? "We couldn't retrieve your location. Check your connection and try again."}</p>
         </div>
         <button
@@ -440,31 +508,33 @@ export default function DailyCheckInModal({
           {/* Main content area */}
           {renderContent()}
 
-          {/* ── Dev Mode Toggle (always visible, clearly labelled) ── */}
-          <div className="mt-6 pt-4 border-t border-gray-100">
-            <label className="flex items-center justify-between cursor-pointer group select-none">
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Dev Mode</p>
-                <p className="text-[9.5px] text-gray-300 font-medium">Simulate hub location (demo only)</p>
-              </div>
-              <button
-                onClick={() => {
-                  const next = !devMode;
-                  setDevMode(next);
-                  if (state !== 'success') runGeolocation(next);
-                }}
-                className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${
-                  devMode ? 'bg-brand-blue' : 'bg-gray-200'
-                }`}
-                role="switch"
-                aria-checked={devMode}
-              >
-                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
-                  devMode ? 'translate-x-4' : 'translate-x-0'
-                }`} />
-              </button>
-            </label>
-          </div>
+          {/* ── Dev Mode Toggle — development builds only ── */}
+          {DEV_MODE_AVAILABLE && (
+            <div className="mt-6 pt-4 border-t border-gray-100">
+              <label className="flex items-center justify-between cursor-pointer group select-none">
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Dev Mode</p>
+                  <p className="text-[9.5px] text-gray-300 font-medium">Simulate hub location (dev builds only)</p>
+                </div>
+                <button
+                  onClick={() => {
+                    const next = !devMode;
+                    setDevMode(next);
+                    if (state !== 'success') runGeolocation(next);
+                  }}
+                  className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${
+                    devMode ? 'bg-brand-blue' : 'bg-gray-200'
+                  }`}
+                  role="switch"
+                  aria-checked={devMode}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                    devMode ? 'translate-x-4' : 'translate-x-0'
+                  }`} />
+                </button>
+              </label>
+            </div>
+          )}
         </div>
       </div>
     </>
