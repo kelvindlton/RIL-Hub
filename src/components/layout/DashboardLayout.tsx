@@ -709,8 +709,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* --- MAIN PAGE CONTENT GRID --- */}
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8 flex flex-col md:flex-row gap-6 md:gap-8 min-h-0">
 
-        {/* Left Sidebar Menu */}
-        <aside className="hidden md:block w-60 shrink-0 self-start space-y-3">
+        {/* Left Sidebar Menu — sticky below the h-16 header so it stays put on scroll */}
+        <aside className="hidden md:block w-60 shrink-0 self-start sticky top-24 space-y-3">
 
           {/* ── Daily Geo Check-In Button ── */}
           {canDailyCheckIn && (
